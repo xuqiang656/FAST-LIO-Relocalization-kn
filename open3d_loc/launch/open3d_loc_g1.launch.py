@@ -1,13 +1,19 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node, SetParameter
 from launch_ros.substitutions import FindPackageShare
+import os
 
 
 def generate_launch_description():
     # 获取包路径
     open3d_loc_share = FindPackageShare('open3d_loc')
+    open3d_loc_source_dir = '/home/kangneng/xq/code/work_space/colcon_ws/src/FAST_LIO_LOCALIZATION_HUMANOID/open3d_loc'
+    log_dir = os.path.join(open3d_loc_source_dir, 'log')
+    os.makedirs(log_dir, exist_ok=True)
+
+    ros_log_dir = SetEnvironmentVariable('ROS_LOG_DIR', log_dir)
 
     # 声明 use_sim_time 参数
     use_sim_time_arg = DeclareLaunchArgument(
@@ -24,50 +30,34 @@ def generate_launch_description():
     ])
 
     # 地图文件路径 - 使用绝对路径指向源码目录中的地图文件
-    map_file = '/home/sax/GO2_Localization_ROS2/src/GO2_Localization_ROS2/data/1.test.ply'
-
-    # 静态TF发布节点 - camera_init to odom
-    static_tf_camera_init2odom = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='camera_init2odom',
-        arguments=['0', '0', '0', '0', '0', '0', '1', 'odom', 'camera_init']
-    )
-
-    # 静态TF发布节点 - imu_link to base_link
-    # 修正：父frame是imu_link，子frame是base_link
-    static_tf_imulink2baselink = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='imulink2baselink',
-        arguments=['0', '0', '0', '0', '0', '0', '1', 'imu_link', 'base_link']
-    )
-
-    # 静态TF发布节点 - base_link to motion_link
-    # 修正：base_link是父frame，motion_link是子frame
-    static_tf_base_center = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='base_center_broadcaster',
-        arguments=['0', '0', '0', '0', '0', '0',
-                   '1', 'base_link', 'motion_link']
-    )
+    map_file = '/home/kangneng/xq/pcd/map1-2/global_map_downsize_rotate.pcd'
 
     # 全局定位节点
     global_localization_node = Node(
         package='open3d_loc',
         executable='global_localization_node',
         name='global_localization_node',
-        output='screen',
+        output='both',
         parameters=[
             config_file,
             {
                 'path_map': map_file,
                 'pcd_queue_maxsize': 10,
-                'voxelsize_coarse': 0.01,
+                'voxelsize_coarse': 0.2,
                 'voxelsize_fine': 0.2,
+                'voxel_downsample_size': 0.1,
+                'icp_distance_threshold': 0.15,
+                'fitness_eval_threshold': 0.10,
+                'normal_search_radius': 0.4,
                 'threshold_fitness': 0.5,
                 'threshold_fitness_init': 0.5,
+                'max_icp_translation': 0.3,
+                'max_icp_yaw_deg': 1.0,
+                'max_init_icp_translation': 2.0,
+                'max_init_icp_yaw_deg': 15.0,
+                'min_init_fitness_improvement': 0.02,
+                'min_source_points': 500,
+                'min_target_points': 20000,
                 'loc_frequence': 2.5,
                 'save_scan': False,
                 'hidden_removal': False,
@@ -105,10 +95,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        ros_log_dir,
         use_sim_time_arg,
-        static_tf_camera_init2odom,
-        static_tf_imulink2baselink,
-        static_tf_base_center,
         global_localization_node,
         # pointcloud_transformer_node
     ])

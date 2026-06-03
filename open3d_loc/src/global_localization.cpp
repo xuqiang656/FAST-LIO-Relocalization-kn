@@ -1,255 +1,25 @@
-#include <rclcpp/rclcpp.hpp>
-#include <rclcpp/wait_for_message.hpp>
-#include <nav_msgs/msg/odometry.hpp>
-#include <tf2_ros/transform_broadcaster.hpp>
-#include <tf2_ros/transform_listener.hpp>
-#include <tf2_ros/buffer.hpp>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <geometry_msgs/msg/transform_stamped.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
-#include <tf2_ros/static_transform_broadcaster.hpp>
-#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
-#include <geometry_msgs/msg/pose_stamped.hpp>
-#include <std_msgs/msg/float32.hpp>
-
-#include <tf2_eigen/tf2_eigen.hpp>
-#include <queue>
-#include <cmath>
 // #include <pcl/common/transforms.h>
-
-#include <Eigen/Core>
-#include <Eigen/Dense>
-#include <open3d/Open3D.h>
-
 #include "open3d_registration/open3d_registration.h"
 #include "open3d_conversions/open3d_conversions.h"
+#include "global_localization.h"
 
 #define PI 3.1415926
 
-class KalmanFilter
-{
-public:
-    KalmanFilter() : processVar_(0.0), estimatedMeasVar_(0.0),
-                     posteriEstimate_(0.0), posteriErrorEstimate_(1.0)
-    {
-    }
-
-    void KalmanFilterInit(double processVar, double estimatedMeasVar, double posteriEstimate = 0.0, double posteriErrorEstimate = 1.0)
-    {
-        processVar_ = processVar;
-        estimatedMeasVar_ = estimatedMeasVar;
-        posteriEstimate_ = posteriEstimate;
-        posteriErrorEstimate_ = posteriErrorEstimate;
-    }
-    void inputLatestNoisyMeasurement(double measurement)
-    {
-        double prioriEstimate = posteriEstimate_;
-        double prioriErrorEstimate = posteriErrorEstimate_ + processVar_;
-
-        double denominator = prioriErrorEstimate + estimatedMeasVar_;
-
-        // 防止除零导致 NaN
-        if (std::abs(denominator) < 1e-10)
-        {
-            // 如果分母接近零，直接使用测量值
-            posteriEstimate_ = measurement;
-            posteriErrorEstimate_ = 1.0;
-            return;
-        }
-
-        double blendingFactor = prioriErrorEstimate / denominator;
-        posteriEstimate_ = prioriEstimate + blendingFactor * (measurement - prioriEstimate);
-        posteriErrorEstimate_ = (1 - blendingFactor) * prioriErrorEstimate;
-    }
-
-    double getLatestEstimatedMeasurement()
-    {
-        return posteriEstimate_;
-    }
-
-private:
-    double processVar_;
-    double estimatedMeasVar_;
-    double posteriEstimate_;
-    double posteriErrorEstimate_;
-};
-
-class GloabalLocalization : public rclcpp::Node
-{
-private:
-    /* data */
-public:
-    GloabalLocalization();
-    ~GloabalLocalization();
-
-    /// @brief 初始化定位
-    void LocalizationInitialize();
-
-    /// @brief 订阅fast_lio里程计信息
-    void CallbackBaselink2Odom(const nav_msgs::msg::Odometry::SharedPtr baselink2odom);
-    /// @brief 订阅在baselink下的点云
-    void CallbackScan(const sensor_msgs::msg::PointCloud2::SharedPtr scan_in_baselink);
-
-    /// @brief 订阅在初始位姿
-    void CallbackInitialPose(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr initialpose);
-
-    void StartLoc();
-
-    void Localization();
-
-    /// @brief 欧拉角转mat3x3
-    /// @param euler
-    /// @return
-    Eigen::Matrix3d Euler2Matrix3d(const Eigen::Vector3d euler);
-
-    /// @brief 获取tf关系到矩阵
-    /// @param frame_id
-    /// @param child_frame_id
-    /// @param matrix
-    /// @return
-    bool GetTfTransformToMatrix(
-        std::string frame_id, std::string child_frame_id, Eigen::Matrix4d &matrix);
-
-    /// @brief compute 3d distance between two points
-    /// @param a
-    /// @param b
-    /// @return 距离值
-    double ComputeMotionDis(const Eigen::Vector3d &a, const Eigen::Vector3d &b);
-
-private:
-    /// @brief 订阅baselink2odom,即fast_lio的里程计信息
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_baselink2odom_;
-
-    /// @brief 订阅当前帧点云
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_scan_cur_;
-
-    /// @brief 订阅初始位姿
-    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr sub_initialpose_;
-
-    /// @brief baselink到odom的pose表达
-    nav_msgs::msg::Odometry pose_baselink2odom_;
-
-    /// @brief bselink到odom的变换矩阵表达
-    Eigen::Matrix4d mat_baselink2odom_;
-    /// @brief odom到map的矩阵
-    Eigen::Matrix4d mat_odom2map_;
-    Eigen::Matrix4d mat_odom2map_kalman_;
-    /// @brief baselink到map = mat_odom2map * mat_baselink2odom
-    Eigen::Matrix4d mat_baselink2map_;
-    /// @brief initialpose初始位姿
-    Eigen::Matrix4d mat_initialpose_;
-
-    std::mutex lock_mat_odom2map_;
-
-    /// @brief baselink和运动中心
-    Eigen::Matrix4d mat_baselink2motionlink_;
-
-    /// @brief imulink到baselink
-    Eigen::Matrix4d mat_imulink2baselink_;
-
-    /// @brief 初始位姿, x, y, z, roll, pitch, yaw (单位:度degrees)
-    std::vector<double> initialpose_;
-
-    /// @brief 原始地图点云
-    std::shared_ptr<open3d::geometry::PointCloud> pcd_map_ori_;
-    std::shared_ptr<open3d::geometry::PointCloud> pcd_map_coarse_;
-    std::shared_ptr<open3d::geometry::PointCloud> pcd_map_fine_;
-    std::shared_ptr<open3d::geometry::PointCloud> pcd_map_cur_;
-    std::shared_ptr<open3d::geometry::PointCloud> pcd_scan_cur_;
-
-    std::queue<open3d::geometry::PointCloud> que_pcd_scan_;
-    int queue_maxsize_;
-    double voxelsize_coarse_;
-    double voxelsize_fine_;
-
-    /// @brief 定位配准fitness(overlap)阈值
-    double threshold_fitness_;
-    /// @brief 配准fitness(overlap)阈值
-    double threshold_fitness_init_;
-
-    std::thread thread_loc_;
-    std::mutex lock_scan_;
-    std::mutex lock_exit_;
-    bool flag_exit_;
-
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_baselink2map_;
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_baselink2map_kalman_;
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_motionlink2map_;
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom2map_;
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom2map_kalman_;
-    rclcpp::Time timestamp_odom_;
-    std::mutex lock_timestamp_;
-
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_map_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_scan_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_scan2map_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_submap_;
-    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_localization_3d_;
-    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr pub_localization_3d_confidence_;
-    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr pub_localization_3d_delay_ms_;
-
-    geometry_msgs::msg::PoseStamped localization_3d_;
-    std_msgs::msg::Float32 localization_3d_confidence_;
-    std_msgs::msg::Float32 localization_3d_delay_ms_;
-
-    std::shared_ptr<tf2_ros::TransformBroadcaster> br_odom2map_;
-    std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_broadcaster_;
-
-    bool save_scan_;
-
-    /// @brief 定位频率(定位间隔时间，多少秒1次)
-    double loc_frequence_;
-
-    /// @brief source点云最大点数量
-    int maxpoints_source_ = 50000;
-    /// @brief target点云最大点数量
-    int maxpoints_target_ = 200000;
-
-    /// @brief 初始化成功标志
-    bool loc_initialized_ = false;
-
-    /// @brief 当前定位overlap，confidence
-    double loc_fitness_;
-
-    /// @brief 定位置信度阈值
-    double confidence_loc_th_;
-
-    /// 卡尔曼滤波器
-    KalmanFilter kf_baselink_x_;
-    KalmanFilter kf_baselink_y_;
-    KalmanFilter kf_baselink_z_;
-    KalmanFilter kalman_filter_odom2map_;
-
-    // 0:kf_processVar 1:kf_estimatedMeasVar
-    std::vector<double> kf_param_x_;
-    std::vector<double> kf_param_y_;
-    std::vector<double> kf_param_z_;
-
-    /// @brief 对odom2map进行kalman滤波
-    bool filter_odom2map_ = false;
-    double kalman_processVar2_ = 0.0;
-    double kalman_estimatedMeasVar2_ = 0.0;
-
-    /// 1202
-    /// @brief 上次更新定位时的定位值
-    Eigen::Vector3d last_loc_;
-    // Eigen::Vector3d cur_loc_;
-    /// @brief 更新地图子图的距离,超过则更新地图子图
-    double dis_updatemap_;
-
-    tf2_ros::Buffer tf_buffer_;
-    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-};
 
 GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
                                              tf_buffer_(this->get_clock()),
                                              tf_listener_(std::make_shared<tf2_ros::TransformListener>(tf_buffer_))
 {
+
     flag_exit_ = false;
     loc_initialized_ = false;
     mat_baselink2odom_ = Eigen::Matrix4d::Identity();
     mat_odom2map_ = Eigen::Matrix4d::Identity();
+    mat_odom2map_kalman_ = Eigen::Matrix4d::Identity();
+    mat_baselink2map_ = Eigen::Matrix4d::Identity();
     mat_initialpose_ = Eigen::Matrix4d::Identity();
+    mat_baselink2motionlink_ = Eigen::Matrix4d::Identity();
+    mat_imulink2baselink_ = Eigen::Matrix4d::Identity();
     last_loc_ = Eigen::Vector3d(0, 0, -5000);
 
     pcd_map_ori_.reset(new open3d::geometry::PointCloud);
@@ -322,6 +92,17 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     // voxelsize
     this->declare_parameter<double>("voxelsize_coarse", 0.2);
     this->declare_parameter<double>("voxelsize_fine", 0.05);
+    this->declare_parameter<double>("voxel_downsample_size", 0.1);
+    this->declare_parameter<double>("icp_distance_threshold", 0.15);
+    this->declare_parameter<double>("fitness_eval_threshold", 0.15);
+    this->declare_parameter<double>("normal_search_radius", 0.4);
+    this->declare_parameter<double>("max_icp_translation", 0.3);
+    this->declare_parameter<double>("max_icp_yaw_deg", 1.0);
+    this->declare_parameter<double>("max_init_icp_translation", 2.0);
+    this->declare_parameter<double>("max_init_icp_yaw_deg", 15.0);
+    this->declare_parameter<double>("min_init_fitness_improvement", 0.02);
+    this->declare_parameter<int>("min_source_points", 2500);
+    this->declare_parameter<int>("min_target_points", 50000);
     this->declare_parameter<double>("threshold_fitness_init", 0.9);
     this->declare_parameter<double>("threshold_fitness", 0.9);
     this->declare_parameter<std::vector<double>>("initialpose", std::vector<double>());
@@ -340,26 +121,50 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     this->get_parameter("kalman_processVar2", kalman_processVar2_);
     this->get_parameter("kalman_estimatedMeasVar2", kalman_estimatedMeasVar2_);
 
-    RCLCPP_INFO(this->get_logger(), "Kalman filter parameters:");
-    RCLCPP_INFO(this->get_logger(), "  kf_x: [%.6f, %.6f], size: %zu",
-                kf_param_x_.size() >= 1 ? kf_param_x_[0] : 0.0,
-                kf_param_x_.size() >= 2 ? kf_param_x_[1] : 0.0,
-                kf_param_x_.size());
-    RCLCPP_INFO(this->get_logger(), "  kf_y: [%.6f, %.6f], size: %zu",
-                kf_param_y_.size() >= 1 ? kf_param_y_[0] : 0.0,
-                kf_param_y_.size() >= 2 ? kf_param_y_[1] : 0.0,
-                kf_param_y_.size());
-    RCLCPP_INFO(this->get_logger(), "  kf_z: [%.6f, %.6f], size: %zu",
-                kf_param_z_.size() >= 1 ? kf_param_z_[0] : 0.0,
-                kf_param_z_.size() >= 2 ? kf_param_z_[1] : 0.0,
-                kf_param_z_.size());
-    RCLCPP_INFO(this->get_logger(), "  filter_odom2map: %s", filter_odom2map_ ? "true" : "false");
+    // RCLCPP_INFO(this->get_logger(), "Kalman filter parameters:");
+    // RCLCPP_INFO(this->get_logger(), "  kf_x: [%.6f, %.6f], size: %zu",
+    //             kf_param_x_.size() >= 1 ? kf_param_x_[0] : 0.0,
+    //             kf_param_x_.size() >= 2 ? kf_param_x_[1] : 0.0,
+    //             kf_param_x_.size());
+    // RCLCPP_INFO(this->get_logger(), "  kf_y: [%.6f, %.6f], size: %zu",
+    //             kf_param_y_.size() >= 1 ? kf_param_y_[0] : 0.0,
+    //             kf_param_y_.size() >= 2 ? kf_param_y_[1] : 0.0,
+    //             kf_param_y_.size());
+    // RCLCPP_INFO(this->get_logger(), "  kf_z: [%.6f, %.6f], size: %zu",
+    //             kf_param_z_.size() >= 1 ? kf_param_z_[0] : 0.0,
+    //             kf_param_z_.size() >= 2 ? kf_param_z_[1] : 0.0,
+    //             kf_param_z_.size());
+    // RCLCPP_INFO(this->get_logger(), "  filter_odom2map: %s", filter_odom2map_ ? "true" : "false");
     this->get_parameter("voxelsize_coarse", voxelsize_coarse_);
     this->get_parameter("voxelsize_fine", voxelsize_fine_);
+    this->get_parameter("voxel_downsample_size", voxel_downsample_size_);
+    this->get_parameter("icp_distance_threshold", icp_distance_threshold_);
+    this->get_parameter("fitness_eval_threshold", fitness_eval_threshold_);
+    this->get_parameter("normal_search_radius", normal_search_radius_);
+    this->get_parameter("max_icp_translation", max_icp_translation_);
+    this->get_parameter("max_icp_yaw_deg", max_icp_yaw_deg_);
+    this->get_parameter("max_init_icp_translation", max_init_icp_translation_);
+    this->get_parameter("max_init_icp_yaw_deg", max_init_icp_yaw_deg_);
+    this->get_parameter("min_init_fitness_improvement", min_init_fitness_improvement_);
+    this->get_parameter("min_source_points", min_source_points_);
+    this->get_parameter("min_target_points", min_target_points_);
     this->get_parameter("threshold_fitness_init", threshold_fitness_init_);
     this->get_parameter("threshold_fitness", threshold_fitness_);
     this->get_parameter("initialpose", initialpose_);
     this->get_parameter("dis_updatemap", dis_updatemap_);
+
+    RCLCPP_INFO(this->get_logger(),
+                "registration params: voxelsize_coarse=%.3f, voxelsize_fine(legacy)=%.3f, "
+                "voxel_downsample_size=%.3f, icp_distance_threshold=%.3f, fitness_eval_threshold=%.3f, "
+                "normal_search_radius=%.3f, threshold_fitness=%.3f, threshold_fitness_init=%.3f, "
+                "max_icp_translation=%.3f, max_icp_yaw_deg=%.3f, max_init_icp_translation=%.3f, "
+                "max_init_icp_yaw_deg=%.3f, min_init_fitness_improvement=%.3f, min_source_points=%d, min_target_points=%d, "
+                "maxpoints_source=%d, maxpoints_target=%d",
+                voxelsize_coarse_, voxelsize_fine_, voxel_downsample_size_, icp_distance_threshold_,
+                fitness_eval_threshold_, normal_search_radius_, threshold_fitness_, threshold_fitness_init_,
+                max_icp_translation_, max_icp_yaw_deg_, max_init_icp_translation_, max_init_icp_yaw_deg_,
+                min_init_fitness_improvement_, min_source_points_, min_target_points_,
+                maxpoints_source_, maxpoints_target_);
 
     for (auto i : initialpose_)
     {
@@ -370,6 +175,7 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     mat_initialpose_.block<3, 1>(0, 3) = Eigen::Vector3d(initialpose_[0], initialpose_[1], initialpose_[2]);
 
     // 读取地图
+    RCLCPP_INFO(this->get_logger(), "开始读取点云地图");
     std::string path_map = "";
     this->declare_parameter<std::string>("path_map", "");
     this->get_parameter("path_map", path_map);
@@ -396,21 +202,81 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     pc2_map.header.stamp = this->now();
     pub_map_->publish(pc2_map);
 
-    pcd_map_fine_ = pcd_map_ori_->VoxelDownSample(voxelsize_fine_);
-    pcd_map_fine_->EstimateNormals(open3d::geometry::KDTreeSearchParamHybrid(voxelsize_fine_ * 2, 30));
+    pcd_map_fine_ = pcd_map_ori_->VoxelDownSample(voxel_downsample_size_);
+    pcd_map_fine_->EstimateNormals(open3d::geometry::KDTreeSearchParamHybrid(normal_search_radius_, 30));
 
-    GetTfTransformToMatrix("base_link", "imu_link", mat_imulink2baselink_);
-    std::cout << "mat_imulink2baselink_:\n"
-              << mat_imulink2baselink_ << std::endl;
+    static_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
+    auto publish_static_tf_from_param =
+        [this](const std::string &param_name,
+               const std::string &parent_frame,
+               const std::string &child_frame,
+               Eigen::Matrix4d *matrix_out)
+    {
+        const std::vector<double> default_tf = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0};
+        this->declare_parameter<std::vector<double>>(param_name, default_tf);
+        std::vector<double> tf_param;
+        this->get_parameter(param_name, tf_param);
 
-    GetTfTransformToMatrix("motion_link", "base_link", mat_baselink2motionlink_);
-    std::cout << "mat_baselink2motionlink_:\n"
-              << mat_baselink2motionlink_ << std::endl;
+        bool valid = tf_param.size() == 7;
+        for (double value : tf_param)
+        {
+            valid = valid && std::isfinite(value);
+        }
+        if (!valid)
+        {
+            RCLCPP_WARN(this->get_logger(),
+                        "invalid static tf param %s, expected [x,y,z,qx,qy,qz,qw], use identity",
+                        param_name.c_str());
+            tf_param = default_tf;
+        }
+
+        Eigen::Quaterniond quat(tf_param[6], tf_param[3], tf_param[4], tf_param[5]);
+        if (!std::isfinite(quat.norm()) || quat.norm() < 1e-6)
+        {
+            RCLCPP_WARN(this->get_logger(),
+                        "invalid quaternion in static tf param %s, use identity rotation",
+                        param_name.c_str());
+            quat = Eigen::Quaterniond::Identity();
+        }
+        else
+        {
+            quat.normalize();
+        }
+
+        Eigen::Matrix4d matrix = Eigen::Matrix4d::Identity();
+        matrix.block<3, 3>(0, 0) = quat.toRotationMatrix();
+        matrix.block<3, 1>(0, 3) = Eigen::Vector3d(tf_param[0], tf_param[1], tf_param[2]);
+        if (matrix_out != nullptr)
+        {
+            *matrix_out = matrix;
+        }
+
+        geometry_msgs::msg::TransformStamped transform;
+        transform.header.stamp = this->now();
+        transform.header.frame_id = parent_frame;
+        transform.child_frame_id = child_frame;
+        transform.transform.translation.x = tf_param[0];
+        transform.transform.translation.y = tf_param[1];
+        transform.transform.translation.z = tf_param[2];
+        transform.transform.rotation.x = quat.x();
+        transform.transform.rotation.y = quat.y();
+        transform.transform.rotation.z = quat.z();
+        transform.transform.rotation.w = quat.w();
+        static_broadcaster_->sendTransform(transform);
+
+        RCLCPP_INFO(this->get_logger(),
+                    "publish static tf %s -> %s from %s: xyz=(%.3f, %.3f, %.3f), quat=(%.6f, %.6f, %.6f, %.6f)",
+                    parent_frame.c_str(), child_frame.c_str(), param_name.c_str(),
+                    tf_param[0], tf_param[1], tf_param[2], quat.x(), quat.y(), quat.z(), quat.w());
+    };
+
+    publish_static_tf_from_param("static_tf_odom_to_camera_init", "odom", "camera_init", nullptr);
+    publish_static_tf_from_param("static_tf_imu_link_to_base_link", "imu_link", "base_link", &mat_imulink2baselink_);
+    publish_static_tf_from_param("static_tf_base_link_to_motion_link", "base_link", "motion_link", &mat_baselink2motionlink_);
 
     RCLCPP_WARN(this->get_logger(), "initialize finished");
 
     br_odom2map_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
-    static_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
 
     StartLoc();
 }
@@ -472,7 +338,7 @@ void GloabalLocalization::CallbackBaselink2Odom(const nav_msgs::msg::Odometry::S
     tf2::fromMsg(baselink2odom->pose.pose, mat_current);
     auto mat_imulink2odom = mat_current.matrix();
 
-    mat_baselink2odom_ = mat_imulink2odom * mat_imulink2baselink_.inverse();
+    mat_baselink2odom_ = mat_imulink2odom * mat_imulink2baselink_;
 
     Eigen::Isometry3d Isometry3d_baselink2map;
     mat_baselink2map_ = mat_odom2map_ * mat_baselink2odom_;
@@ -560,7 +426,7 @@ void GloabalLocalization::CallbackBaselink2Odom(const nav_msgs::msg::Odometry::S
         baselink2map_kalman.header.stamp = baselink2odom->header.stamp;
         pub_baselink2map_kalman_->publish(baselink2map_kalman);
 
-        Eigen::Matrix4d mat_motionlink2map = mat_baselink2map_kalman * mat_baselink2motionlink_.inverse();
+        Eigen::Matrix4d mat_motionlink2map = mat_baselink2map_kalman * mat_baselink2motionlink_;
         Eigen::Isometry3d Isometry3d_motionlink2map;
         Isometry3d_motionlink2map.matrix() = mat_motionlink2map;
         nav_msgs::msg::Odometry motionlink2map;
@@ -678,6 +544,9 @@ void GloabalLocalization::LocalizationInitialize()
             lock_scan_.unlock();
             lock_mat_odom2map_.lock();
 
+            Eigen::Matrix4d reg_matrix = mat_odom2map_;
+            mat_baselink2map_cur = reg_matrix * mat_baselink2odom_cur;
+
             /// 将cropbox转换到对应位置进行裁剪点云
             OBB_map->center_ = mat_baselink2map_cur.block<3, 1>(0, 3);
             OBB_map->R_ = mat_baselink2map_cur.block<3, 3>(0, 0);
@@ -688,44 +557,90 @@ void GloabalLocalization::LocalizationInitialize()
             /// 配准计时
             auto reg0_s = std::chrono::high_resolution_clock::now();
 
-            Eigen::Matrix4d reg_matrix = Eigen::Matrix4d::Identity();
-            reg_matrix = mat_odom2map_;
-
             *target = *map_fine_crop;
-            open3d::utility::LogInfo("before sample, target size: {}, has normal: {}", target->points_.size(), target->HasNormals() ? "true" : "false");
+            RCLCPP_INFO(this->get_logger(), "before sample, target size: %zu, has normal: %s",
+                        target->points_.size(), target->HasNormals() ? "true" : "false");
             if (target->points_.size() > static_cast<size_t>(maxpoints_target_))
             {
                 target = target->RandomDownSample(double(maxpoints_target_) / target->points_.size());
             }
-            open3d::utility::LogInfo("after sample, target size: {}, has normal: {}", target->points_.size(), target->HasNormals() ? "true" : "false");
+            RCLCPP_INFO(this->get_logger(), "after sample, target size: %zu, has normal: %s",
+                        target->points_.size(), target->HasNormals() ? "true" : "false");
 
             source = pcd_scan->Crop(*OBB_scan);
-            open3d::utility::LogInfo("source size: {}, has normal: {}", source->points_.size(), source->HasNormals() ? "true" : "false");
+            RCLCPP_INFO(this->get_logger(), "before voxel downsample, source size: %zu, has normal: %s",
+                        source->points_.size(), source->HasNormals() ? "true" : "false");
+            source = source->VoxelDownSample(voxel_downsample_size_);
+            RCLCPP_INFO(this->get_logger(), "after voxel downsample, source size: %zu, has normal: %s",
+                        source->points_.size(), source->HasNormals() ? "true" : "false");
             if (source->points_.size() > static_cast<size_t>(maxpoints_source_))
             {
                 source = source->RandomDownSample(double(maxpoints_source_) / source->points_.size());
             }
-            open3d::utility::LogInfo("source size: {}, has normal: {}", source->points_.size(), source->HasNormals() ? "true" : "false");
+            RCLCPP_INFO(this->get_logger(), "after sample, source size: %zu, has normal: %s",
+                        source->points_.size(), source->HasNormals() ? "true" : "false");
+
+            if (source->points_.size() < static_cast<size_t>(min_source_points_) ||
+                target->points_.size() < static_cast<size_t>(min_target_points_))
+            {
+                RCLCPP_WARN(this->get_logger(),
+                            "skip init icp: source=%zu (min=%d), target=%zu (min=%d), map_center=(%.3f, %.3f, %.3f), scan_center=(%.3f, %.3f, %.3f)",
+                            source->points_.size(), min_source_points_, target->points_.size(), min_target_points_,
+                            OBB_map->center_.x(), OBB_map->center_.y(), OBB_map->center_.z(),
+                            OBB_scan->center_.x(), OBB_scan->center_.y(), OBB_scan->center_.z());
+                lock_mat_odom2map_.unlock();
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                continue;
+            }
 
             source->Transform(reg_matrix);
             *pcd_scan2map = *source;
+            auto eva_before_icp = open3d::pipelines::registration::EvaluateRegistration(*source, *target, fitness_eval_threshold_);
+            RCLCPP_INFO(this->get_logger(), "init before icp: eva_fitness=%f, inlier_rmse=%f, eval_threshold=%.3f",
+                        eva_before_icp.fitness_, eva_before_icp.inlier_rmse_, fitness_eval_threshold_);
 
-            // auto multiScale_reg_matrix = pcd_tools::RegistrationMultiScaleIcp(source, target, voxelsize_fine_, 1, {1, 2, 4});
-            auto multiScale_reg_matrix = pcd_tools::RegistrationMultiScaleIcp(source, target, voxelsize_fine_, 1, {1, 2, 3});
+            auto multiScale_reg_matrix = pcd_tools::RegistrationMultiScaleIcp(source, target, voxel_downsample_size_, 1, {1, 2, 4});
             reg_matrix = multiScale_reg_matrix * reg_matrix;
             source->Transform(multiScale_reg_matrix);
-            auto eva_result_coarse = open3d::pipelines::registration::EvaluateRegistration(*source, *target, voxelsize_fine_ * 3);
-            open3d::utility::LogInfo("eva fitness: {}", eva_result_coarse.fitness_);
+            auto eva_result_coarse = open3d::pipelines::registration::EvaluateRegistration(*source, *target, fitness_eval_threshold_);
+            double init_delta_trans = multiScale_reg_matrix.block<3, 1>(0, 3).norm();
+            double init_delta_yaw = std::atan2(multiScale_reg_matrix(1, 0), multiScale_reg_matrix(0, 0)) * 180.0 / M_PI;
+            RCLCPP_INFO(this->get_logger(),
+                        "init icp result: eva_before=%f, eva_after=%f, inlier_rmse=%f, delta_trans=%.3f, delta_yaw_deg=%.3f, threshold_fitness_init=%.3f, max_init_icp_translation=%.3f, max_init_icp_yaw_deg=%.3f",
+                        eva_before_icp.fitness_, eva_result_coarse.fitness_, eva_result_coarse.inlier_rmse_,
+                        init_delta_trans, init_delta_yaw, threshold_fitness_init_, max_init_icp_translation_, max_init_icp_yaw_deg_);
             fitness_initial = eva_result_coarse.fitness_;
             *pcd_scan2map = *source;
 
-            mat_odom2map_ = reg_matrix;
+            bool safe_init_step = init_delta_trans <= max_init_icp_translation_ &&
+                                  std::abs(init_delta_yaw) <= max_init_icp_yaw_deg_;
+            bool init_fitness_improved = fitness_initial > eva_before_icp.fitness_ + min_init_fitness_improvement_;
+            bool accept_init = fitness_initial > threshold_fitness_init_ && safe_init_step;
+            bool update_init_candidate = safe_init_step && (accept_init || init_fitness_improved);
+
+            if (update_init_candidate)
+            {
+                mat_odom2map_ = reg_matrix;
+                RCLCPP_INFO(this->get_logger(),
+                            "update init candidate: eva_before=%f, eva_after=%f, improvement=%f, success=%s, odom2map_xyz=(%.3f, %.3f, %.3f)",
+                            eva_before_icp.fitness_, fitness_initial, fitness_initial - eva_before_icp.fitness_,
+                            accept_init ? "true" : "false", mat_odom2map_(0, 3), mat_odom2map_(1, 3), mat_odom2map_(2, 3));
+            }
+            else
+            {
+                RCLCPP_WARN(this->get_logger(),
+                            "reject init icp: eva_before=%f, eva_after=%f, threshold=%.3f, improvement=%f, min_improvement=%.3f, delta_trans=%.3f, max_delta=%.3f, delta_yaw_deg=%.3f, max_yaw_deg=%.3f, source=%zu, target=%zu",
+                            eva_before_icp.fitness_, fitness_initial, threshold_fitness_init_,
+                            fitness_initial - eva_before_icp.fitness_, min_init_fitness_improvement_,
+                            init_delta_trans, max_init_icp_translation_, init_delta_yaw, max_init_icp_yaw_deg_,
+                            source->points_.size(), target->points_.size());
+            }
             lock_mat_odom2map_.unlock();
             auto loc_e = std::chrono::high_resolution_clock::now(); /// 结束定位计时
             loc_cost = std::chrono::duration_cast<std::chrono::microseconds>(loc_e - loc_s).count() / 1000.0;
             RCLCPP_INFO(this->get_logger(), "localization cost: %f ms", loc_cost);
 
-            if (fitness_initial > threshold_fitness_init_)
+            if (accept_init)
             {
                 count_success += 1;
                 /// 连续两次定位成功后定位初始化成功
@@ -741,7 +656,7 @@ void GloabalLocalization::LocalizationInitialize()
         }
     }
 
-    open3d::utility::LogInfo("\n\n\nlocalization initialize success!!!!\n\n\n");
+    RCLCPP_INFO(this->get_logger(), "\n\n\nlocalization initialize success!!!!\n\n\n");
 }
 void GloabalLocalization::Localization()
 {
@@ -772,7 +687,12 @@ void GloabalLocalization::Localization()
 
     // initialize
     /****初始化定位****/
-    mat_odom2map_ = mat_initialpose_; /// 初始位姿，从目前是从配置文件给
+    mat_odom2map_ = mat_initialpose_ * mat_baselink2odom_.inverse(); /// initialpose 表示 base_link 在 map 下的位姿
+    RCLCPP_INFO(this->get_logger(),
+                "initial odom2map from initialpose and current odom: initial_xyz=(%.3f, %.3f, %.3f), odom_xyz=(%.3f, %.3f, %.3f), odom2map_xyz=(%.3f, %.3f, %.3f)",
+                mat_initialpose_(0, 3), mat_initialpose_(1, 3), mat_initialpose_(2, 3),
+                mat_baselink2odom_(0, 3), mat_baselink2odom_(1, 3), mat_baselink2odom_(2, 3),
+                mat_odom2map_(0, 3), mat_odom2map_(1, 3), mat_odom2map_(2, 3));
     LocalizationInitialize();
 
     /// 卡尔曼滤波初始化
@@ -860,14 +780,14 @@ void GloabalLocalization::Localization()
         if (time_diff_loc < loc_frequence_)
         {
             int wait_time = int((loc_frequence_ - time_diff_loc) * 1000);
-            open3d::utility::LogInfo("\n\ntime_this_loc: {}, time_last: {},\ntime_diff: {} s, sleep {} ms",
-                                     std::chrono::duration_cast<std::chrono::milliseconds>(time_this_loc.time_since_epoch()).count() / 1000.0,
-                                     std::chrono::duration_cast<std::chrono::milliseconds>(time_last_loc.time_since_epoch()).count() / 1000.0, time_diff_loc, wait_time);
+            RCLCPP_INFO(this->get_logger(), "\n\ntime_this_loc: %f, time_last: %f,\ntime_diff: %f s, sleep %d ms",
+                        std::chrono::duration_cast<std::chrono::milliseconds>(time_this_loc.time_since_epoch()).count() / 1000.0,
+                        std::chrono::duration_cast<std::chrono::milliseconds>(time_last_loc.time_since_epoch()).count() / 1000.0, time_diff_loc, wait_time);
             std::this_thread::sleep_for(std::chrono::milliseconds(wait_time));
         }
         else
         {
-            open3d::utility::LogInfo("\n\ntime_diff:{} s, localization right now", time_diff_loc);
+            RCLCPP_INFO(this->get_logger(), "\n\ntime_diff:%f s, localization right now", time_diff_loc);
         }
         auto loc_s = std::chrono::high_resolution_clock::now(); /// 开始定位计时
 
@@ -892,18 +812,22 @@ void GloabalLocalization::Localization()
             Eigen::Matrix4d mat_baselink2map_cur = Eigen::Matrix4d::Identity();
 
             mat_baselink2odom_cur = mat_baselink2odom_;
-            mat_baselink2map_cur = mat_baselink2map_;
             *pcd_scan = *pcd_scan_cur_;
             lock_scan_.unlock();
+
+            lock_mat_odom2map_.lock();
+            mat_baselink2map_cur = mat_odom2map_ * mat_baselink2odom_cur;
+            lock_mat_odom2map_.unlock();
+
             Eigen::Vector3d cur_loc(mat_baselink2map_cur(0, 3), mat_baselink2map_cur(1, 3), mat_baselink2map_cur(2, 3));
             auto dis_motion = ComputeMotionDis(last_loc_, cur_loc);
             if (dis_motion > dis_updatemap_)
             {
                 auto submap_s = std::chrono::high_resolution_clock::now();
 
-                open3d::utility::LogInfo("\n***\n****\n***\n\n\nlast map update loc: x: {}, y: {}, z{},\n\
-                now loc: x: {}, y: {}, z{}, 3d distance: {}, now needpdate submap",
-                                         last_loc_.x(), last_loc_.y(), last_loc_.z(), cur_loc.x(), cur_loc.y(), cur_loc.z(), dis_motion);
+                RCLCPP_INFO(this->get_logger(), "\n***\n****\n***\n\n\nlast map update loc: x: %f, y: %f, z%f,\n\
+                now loc: x: %f, y: %f, z%f, 3d distance: %f, now needpdate submap",
+                            last_loc_.x(), last_loc_.y(), last_loc_.z(), cur_loc.x(), cur_loc.y(), cur_loc.z(), dis_motion);
                 last_loc_ = cur_loc;
                 OBB_map->center_ = mat_baselink2map_cur.block<3, 1>(0, 3);
                 OBB_map->R_ = mat_baselink2map_cur.block<3, 3>(0, 0);
@@ -927,33 +851,70 @@ void GloabalLocalization::Localization()
             reg_matrix = mat_odom2map_;
 
             *target = *map_fine_crop;
-            open3d::utility::LogInfo("before sample, target size: {}, has normal: {}", target->points_.size(), target->HasNormals() ? "true" : "false");
+            RCLCPP_INFO(this->get_logger(), "before sample, target size: %zu, has normal: %s",
+                        target->points_.size(), target->HasNormals() ? "true" : "false");
             if (target->points_.size() > static_cast<size_t>(maxpoints_target_))
             {
                 target = target->RandomDownSample(double(maxpoints_target_) / target->points_.size());
             }
-            open3d::utility::LogInfo("after sample, target size: {}, has normal: {}", target->points_.size(), target->HasNormals() ? "true" : "false");
+            RCLCPP_INFO(this->get_logger(), "after sample, target size: %zu, has normal: %s",
+                        target->points_.size(), target->HasNormals() ? "true" : "false");
 
             source = pcd_scan->Crop(*OBB_scan);
-            open3d::utility::LogInfo("source size: {}, maxpoints_source_: {}", source->points_.size(), maxpoints_source_);
-            source = source->VoxelDownSample(voxelsize_fine_);
-            open3d::utility::LogInfo("source size after voxel downsample: {}", source->points_.size());
+            RCLCPP_INFO(this->get_logger(), "source size: %zu, maxpoints_source_: %d",
+                        source->points_.size(), maxpoints_source_);
+            source = source->VoxelDownSample(voxel_downsample_size_);
+            RCLCPP_INFO(this->get_logger(), "source size after voxel downsample %.3f: %zu",
+                        voxel_downsample_size_, source->points_.size());
             if (source->points_.size() > static_cast<size_t>(maxpoints_source_))
             {
                 source = source->RandomDownSample(double(maxpoints_source_) / source->points_.size());
             }
-            open3d::utility::LogInfo("after prerpocess: {}", source->points_.size());
+            RCLCPP_INFO(this->get_logger(), "after prerpocess: %zu", source->points_.size());
 
-            auto reg_result2 = pcd_tools::RegistrationIcp(source, target, voxelsize_fine_ * 2, reg_matrix, 1);
+            if (source->points_.size() < static_cast<size_t>(min_source_points_) ||
+                target->points_.size() < static_cast<size_t>(min_target_points_))
+            {
+                RCLCPP_WARN(this->get_logger(),
+                            "skip tracking icp: source=%zu (min=%d), target=%zu (min=%d), map_center=(%.3f, %.3f, %.3f), scan_center=(%.3f, %.3f, %.3f)",
+                            source->points_.size(), min_source_points_, target->points_.size(), min_target_points_,
+                            OBB_map->center_.x(), OBB_map->center_.y(), OBB_map->center_.z(),
+                            OBB_scan->center_.x(), OBB_scan->center_.y(), OBB_scan->center_.z());
+                lock_mat_odom2map_.unlock();
+                continue;
+            }
+
+            auto eva_before_icp = open3d::pipelines::registration::EvaluateRegistration(*source, *target, fitness_eval_threshold_, reg_matrix);
+            RCLCPP_INFO(this->get_logger(),
+                        "tracking before icp: eva_fitness=%f, inlier_rmse=%f, eval_threshold=%.3f, source=%zu, target=%zu",
+                        eva_before_icp.fitness_, eva_before_icp.inlier_rmse_, fitness_eval_threshold_,
+                        source->points_.size(), target->points_.size());
+
+            auto reg_result2 = pcd_tools::RegistrationIcp(source, target, icp_distance_threshold_, reg_matrix, 1);
             reg_matrix = reg_result2.transformation_ * reg_matrix;
-            auto eva_result2 = open3d::pipelines::registration::EvaluateRegistration(*source, *target, voxelsize_fine_ * 4, reg_matrix);
+            auto eva_result2 = open3d::pipelines::registration::EvaluateRegistration(*source, *target, fitness_eval_threshold_, reg_matrix);
             /// 给发布的置信度赋值
             loc_fitness_ = eva_result2.fitness_;
-            open3d::utility::LogInfo("reg_result.fitness: {}, eva fitness: {}", reg_result2.fitness_, eva_result2.fitness_);
+            double delta_trans = reg_result2.transformation_.block<3, 1>(0, 3).norm();
+            double delta_yaw = std::atan2(reg_result2.transformation_(1, 0), reg_result2.transformation_(0, 0)) * 180.0 / M_PI;
+            RCLCPP_INFO(this->get_logger(),
+                        "tracking icp result: reg_fitness=%f, eva_before=%f, eva_after=%f, inlier_rmse=%f, delta_trans=%.3f, delta_yaw_deg=%.3f, icp_threshold=%.3f, eval_threshold=%.3f",
+                        reg_result2.fitness_, eva_before_icp.fitness_, eva_result2.fitness_, reg_result2.inlier_rmse_,
+                        delta_trans, delta_yaw, icp_distance_threshold_, fitness_eval_threshold_);
             /// 超过阈值才更新,防止因配准结果有问题而导致定位出问题
-            if (loc_fitness_ > threshold_fitness_)
+            bool accept_tracking = loc_fitness_ > threshold_fitness_ &&
+                                   delta_trans <= max_icp_translation_ &&
+                                   std::abs(delta_yaw) <= max_icp_yaw_deg_;
+            if (accept_tracking)
             {
                 mat_odom2map_ = reg_matrix;
+            }
+            else
+            {
+                RCLCPP_WARN(this->get_logger(),
+                            "reject tracking icp: eva_fitness=%f, threshold=%.3f, delta_trans=%.3f, max_delta=%.3f, delta_yaw_deg=%.3f, max_yaw_deg=%.3f, source=%zu, target=%zu",
+                            loc_fitness_, threshold_fitness_, delta_trans, max_icp_translation_, delta_yaw, max_icp_yaw_deg_,
+                            source->points_.size(), target->points_.size());
             }
             lock_mat_odom2map_.unlock();
 
@@ -982,20 +943,16 @@ void GloabalLocalization::StartLoc()
 
 void GloabalLocalization::CallbackInitialPose(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr initialpose)
 {
-    std::cout << "mat_odom2map_\n"
-              << mat_odom2map_ << std::endl;
-    std::cout << "confidence_loc_th_: " << confidence_loc_th_ << " current confidence: " << loc_fitness_ << std::endl;
+    RCLCPP_INFO(this->get_logger(), "received initialpose: current confidence=%f, loc_initialized=%s",
+                loc_fitness_, loc_initialized_ ? "true" : "false");
 
     if (!(loc_initialized_ && loc_fitness_ > 0.99))
     {
-        std::cout << "initpose:x y z, x y z w\n"
-                  << initialpose->pose.pose.position.x << " "
-                  << initialpose->pose.pose.position.y << " "
-                  << initialpose->pose.pose.position.z << " "
-                  << initialpose->pose.pose.orientation.x << " "
-                  << initialpose->pose.pose.orientation.y << " "
-                  << initialpose->pose.pose.orientation.z << " "
-                  << initialpose->pose.pose.orientation.w << std::endl;
+        RCLCPP_INFO(this->get_logger(),
+                    "initialpose msg: xyz=(%.3f, %.3f, %.3f), quat=(%.6f, %.6f, %.6f, %.6f)",
+                    initialpose->pose.pose.position.x, initialpose->pose.pose.position.y, initialpose->pose.pose.position.z,
+                    initialpose->pose.pose.orientation.x, initialpose->pose.pose.orientation.y,
+                    initialpose->pose.pose.orientation.z, initialpose->pose.pose.orientation.w);
 
         Eigen::Quaterniond rotation_q;
         rotation_q.w() = initialpose->pose.pose.orientation.w;
@@ -1005,12 +962,14 @@ void GloabalLocalization::CallbackInitialPose(const geometry_msgs::msg::PoseWith
         mat_initialpose_.block<3, 3>(0, 0) = rotation_q.matrix();
         mat_initialpose_.block<3, 1>(0, 3) = Eigen::Vector3d(initialpose->pose.pose.position.x, initialpose->pose.pose.position.y, initialpose->pose.pose.position.z);
         lock_mat_odom2map_.lock();
-        mat_odom2map_ = mat_initialpose_;
+        mat_odom2map_ = mat_initialpose_ * mat_baselink2odom_.inverse();
+        RCLCPP_INFO(this->get_logger(),
+                    "update odom2map from initialpose: initial_xyz=(%.3f, %.3f, %.3f), odom_xyz=(%.3f, %.3f, %.3f), odom2map_xyz=(%.3f, %.3f, %.3f)",
+                    mat_initialpose_(0, 3), mat_initialpose_(1, 3), mat_initialpose_(2, 3),
+                    mat_baselink2odom_(0, 3), mat_baselink2odom_(1, 3), mat_baselink2odom_(2, 3),
+                    mat_odom2map_(0, 3), mat_odom2map_(1, 3), mat_odom2map_(2, 3));
         lock_mat_odom2map_.unlock();
-        std::cout << "\n\n*** update mat_odom2map_" << std::endl;
     }
-    std::cout << "mat_odom2map_\n"
-              << mat_odom2map_ << std::endl;
 }
 
 double GloabalLocalization::ComputeMotionDis(const Eigen::Vector3d &a, const Eigen::Vector3d &b)

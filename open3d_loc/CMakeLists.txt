@@ -39,7 +39,7 @@ find_package(OpenCV REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem system)
 
 # Set Open3D path - modify this to your installation path
-set(Open3D_DIR "/home/sax/open3d141/lib/cmake/Open3D")
+set(Open3D_DIR "/home/kangneng/xq/code/thirdparty/open3d141/lib/cmake/Open3D")
 
 # set(Open3D_DIR "/home/unitree/open3d141_arm/open3d141/lib/cmake/Open3D")
 find_package(Open3D REQUIRED)
