@@ -7,24 +7,24 @@ global_localization_node:
     save_scan: false
     hidden_removal: false
 
-    # map publish. Set <= 0 to publish only once with transient_local QoS.
-    map_publish_interval: 5.0
+    # 地图发布频率，单位:秒
+    map_publish_interval: 5.0     
 
     # Downsample and ICP parameters.
-    voxelsize_coarse: 0.2
-    voxelsize_fine: 0.2
+    voxelsize_coarse: 0.2   # 初步下采样体素大小
+    voxelsize_fine: 0.2     # 精细下采样体素大小（地图本身就是0.2m的）
     voxel_downsample_size: 0.1
-    icp_distance_threshold: 0.15
-    fitness_eval_threshold: 0.15
-    normal_search_radius: 0.4
+    icp_distance_threshold: 0.15    # icp的时候最近点的距离阈值
+    fitness_eval_threshold: 0.15    # 评估icp结果的fitness时，最近点的距离阈值，过大可能导致错误的高fitness，过小可能导致正确的低fitness
+    normal_search_radius: 0.4       # 法线估计的搜索半径
 
-    threshold_fitness: 0.5
-    threshold_fitness_init: 0.5
-    max_icp_translation: 0.4
-    max_icp_yaw_deg: 1.5
-    max_init_icp_translation: 2.0
-    max_init_icp_yaw_deg: 15.0
-    min_init_fitness_improvement: 0.02
+    threshold_fitness: 0.5          # 持续定位只有fitness大于这个值才认为定位结果是可信的
+    threshold_fitness_init: 0.5       # 全局定位只有fitness大于这个值才认为定位结果是可信的，过大可能导致无法全局定位成功，过小可能导致错误的全局定位结果被接受
+    max_icp_translation: 0.4        # icp的最大平移约束，
+    max_icp_yaw_deg: 1.5        # icp的最大yaw约束，单位是度，
+    max_init_icp_translation: 2.0     # 全局定位时icp的最大平移约束，过大可能导致错误的icp结果被接受，过小可能导致正确的icp结果被拒绝
+    max_init_icp_yaw_deg: 15.0      # 全局定位时icp的最大yaw约束，单位是度，
+    min_init_fitness_improvement: 0.02    # 全局定位时，初始icp的fitness必须比RANSAC的fitness至少提高这个值才接受icp结果，
     min_source_points: 500
     min_target_points: 20000
     maxpoints_source: 80000
