@@ -19,7 +19,7 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     mat_baselink2map_ = Eigen::Matrix4d::Identity();
     mat_initialpose_ = Eigen::Matrix4d::Identity();
     mat_baselink2motionlink_ = Eigen::Matrix4d::Identity();
-    mat_imulink2baselink_ = Eigen::Matrix4d::Identity();
+    mat_baselink2imulink_ = Eigen::Matrix4d::Identity();
     last_loc_ = Eigen::Vector3d(0, 0, -5000);
 
     pcd_map_ori_.reset(new open3d::geometry::PointCloud);
@@ -29,13 +29,16 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     pcd_map_fine_.reset(new open3d::geometry::PointCloud);
     queue_maxsize_ = 5;
 
-    pub_baselink2map_ = this->create_publisher<nav_msgs::msg::Odometry>("/baselink2map", 100000);
-    pub_baselink2map_kalman_ = this->create_publisher<nav_msgs::msg::Odometry>("/baselink2map_kalman", 100000);
-    pub_motionlink2map_ = this->create_publisher<nav_msgs::msg::Odometry>("/motionlink2map", 100000);
-    pub_odom2map_ = this->create_publisher<nav_msgs::msg::Odometry>("/odom2map", 100000);
-    pub_odom2map_kalman_ = this->create_publisher<nav_msgs::msg::Odometry>("/odom2map_kalman", 100000);
+    pub_baselink2map_ = this->create_publisher<nav_msgs::msg::Odometry>("/baselink2map", 1);
+    pub_baselink2map_kalman_ = this->create_publisher<nav_msgs::msg::Odometry>("/baselink2map_kalman", 1);
+    pub_motionlink2map_ = this->create_publisher<nav_msgs::msg::Odometry>("/motionlink2map", 1);
+    pub_odom2map_ = this->create_publisher<nav_msgs::msg::Odometry>("/odom2map", 1);
+    pub_odom2map_kalman_ = this->create_publisher<nav_msgs::msg::Odometry>("/odom2map_kalman", 1);
 
-    pub_map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/map", 1);
+    rclcpp::QoS map_qos(rclcpp::KeepLast(1));
+    map_qos.reliable();
+    map_qos.transient_local();
+    pub_map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/map", map_qos);
     pub_submap_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/submap", 1);
     pub_scan2map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/scan2map", 1);
     pub_scan_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/scan", 1);
@@ -107,6 +110,7 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     this->declare_parameter<double>("threshold_fitness", 0.9);
     this->declare_parameter<std::vector<double>>("initialpose", std::vector<double>());
     this->declare_parameter<double>("dis_updatemap", 1);
+    this->declare_parameter<double>("map_publish_interval", 2.0);
 
     this->get_parameter("pcd_queue_maxsize", queue_maxsize_);
     this->get_parameter("save_scan", save_scan_);
@@ -152,6 +156,8 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     this->get_parameter("threshold_fitness", threshold_fitness_);
     this->get_parameter("initialpose", initialpose_);
     this->get_parameter("dis_updatemap", dis_updatemap_);
+    double map_publish_interval = 2.0;
+    this->get_parameter("map_publish_interval", map_publish_interval);
 
     RCLCPP_INFO(this->get_logger(),
                 "registration params: voxelsize_coarse=%.3f, voxelsize_fine(legacy)=%.3f, "
@@ -196,16 +202,34 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     pcd_map_coarse_->EstimateNormals(open3d::geometry::KDTreeSearchParamHybrid(voxelsize_coarse_ * 2, 30));
 
     /// publish map, 用粗地图可视化，减少资源占用
-    sensor_msgs::msg::PointCloud2 pc2_map;
-    open3d_conversions::open3dToRos(*pcd_map_coarse_, pc2_map);
-    pc2_map.header.frame_id = "map";
-    pc2_map.header.stamp = this->now();
-    pub_map_->publish(pc2_map);
+    open3d_conversions::open3dToRos(*pcd_map_coarse_, map_msg_);
+    map_msg_.header.frame_id = "map";
+    map_msg_.header.stamp = this->now();
+    pub_map_->publish(map_msg_);
+    if (map_publish_interval > 0.0)
+    {
+        auto map_publish_period = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::duration<double>(map_publish_interval));
+        map_publish_timer_ = this->create_wall_timer(
+            map_publish_period,
+            [this]()
+            {
+                map_msg_.header.stamp = this->now();
+                pub_map_->publish(map_msg_);
+                RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
+                                     "republish static map: points=%zu, frame_id=%s",
+                                     pcd_map_coarse_->points_.size(), map_msg_.header.frame_id.c_str());
+            });
+        RCLCPP_INFO(this->get_logger(),
+                    "map publisher uses transient_local QoS and republish interval %.3f s",
+                    map_publish_interval);
+    }
 
     pcd_map_fine_ = pcd_map_ori_->VoxelDownSample(voxel_downsample_size_);
     pcd_map_fine_->EstimateNormals(open3d::geometry::KDTreeSearchParamHybrid(normal_search_radius_, 30));
 
     static_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
+    
     auto publish_static_tf_from_param =
         [this](const std::string &param_name,
                const std::string &parent_frame,
@@ -270,8 +294,7 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
                     tf_param[0], tf_param[1], tf_param[2], quat.x(), quat.y(), quat.z(), quat.w());
     };
 
-    publish_static_tf_from_param("static_tf_odom_to_camera_init", "odom", "camera_init", nullptr);
-    publish_static_tf_from_param("static_tf_imu_link_to_base_link", "imu_link", "base_link", &mat_imulink2baselink_);
+    publish_static_tf_from_param("static_tf_base_link_to_imu_link", "base_link", "imu_link", &mat_baselink2imulink_);
     publish_static_tf_from_param("static_tf_base_link_to_motion_link", "base_link", "motion_link", &mat_baselink2motionlink_);
 
     RCLCPP_WARN(this->get_logger(), "initialize finished");
@@ -338,7 +361,7 @@ void GloabalLocalization::CallbackBaselink2Odom(const nav_msgs::msg::Odometry::S
     tf2::fromMsg(baselink2odom->pose.pose, mat_current);
     auto mat_imulink2odom = mat_current.matrix();
 
-    mat_baselink2odom_ = mat_imulink2odom * mat_imulink2baselink_;
+    mat_baselink2odom_ = mat_imulink2odom * mat_baselink2imulink_.inverse();
 
     Eigen::Isometry3d Isometry3d_baselink2map;
     mat_baselink2map_ = mat_odom2map_ * mat_baselink2odom_;
@@ -369,6 +392,21 @@ void GloabalLocalization::CallbackBaselink2Odom(const nav_msgs::msg::Odometry::S
     transform_odom2map.transform.translation.z = odom2map.pose.pose.position.z;
     transform_odom2map.transform.rotation = odom2map.pose.pose.orientation;
     br_odom2map_->sendTransform(transform_odom2map);
+
+    geometry_msgs::msg::TransformStamped transform_baselink2odom;
+    transform_baselink2odom.header.frame_id = "odom";
+    transform_baselink2odom.child_frame_id = "base_link";
+    transform_baselink2odom.header.stamp = baselink2odom->header.stamp;
+    transform_baselink2odom.transform.translation.x = mat_baselink2odom_(0, 3);
+    transform_baselink2odom.transform.translation.y = mat_baselink2odom_(1, 3);
+    transform_baselink2odom.transform.translation.z = mat_baselink2odom_(2, 3);
+    Eigen::Quaterniond quat_baselink2odom(mat_baselink2odom_.block<3, 3>(0, 0));
+    quat_baselink2odom.normalize();
+    transform_baselink2odom.transform.rotation.x = quat_baselink2odom.x();
+    transform_baselink2odom.transform.rotation.y = quat_baselink2odom.y();
+    transform_baselink2odom.transform.rotation.z = quat_baselink2odom.z();
+    transform_baselink2odom.transform.rotation.w = quat_baselink2odom.w();
+    br_odom2map_->sendTransform(transform_baselink2odom);
 
     /// 卡尔曼滤波 - 只在定位初始化完成后执行
     if (loc_initialized_)
@@ -436,17 +474,6 @@ void GloabalLocalization::CallbackBaselink2Odom(const nav_msgs::msg::Odometry::S
         motionlink2map.header.stamp = baselink2odom->header.stamp;
         pub_motionlink2map_->publish(motionlink2map);
 
-        /// 发布tf关系
-        geometry_msgs::msg::TransformStamped transform;
-        transform.header.frame_id = "map";
-        transform.child_frame_id = "motion_link";
-        transform.header.stamp = baselink2odom->header.stamp;
-        transform.transform.translation.x = motionlink2map.pose.pose.position.x;
-        transform.transform.translation.y = motionlink2map.pose.pose.position.y;
-        transform.transform.translation.z = motionlink2map.pose.pose.position.z;
-        transform.transform.rotation = motionlink2map.pose.pose.orientation;
-        br_odom2map_->sendTransform(transform);
-
         localization_3d_confidence_.data = loc_fitness_;
         pub_localization_3d_confidence_->publish(localization_3d_confidence_);
         localization_3d_delay_ms_.data = (this->now() - baselink2odom->header.stamp).seconds() * 1000.0;
@@ -512,7 +539,7 @@ void GloabalLocalization::LocalizationInitialize()
     std::shared_ptr<open3d::geometry::OrientedBoundingBox> OBB_map(new open3d::geometry::OrientedBoundingBox);
     std::shared_ptr<open3d::geometry::OrientedBoundingBox> OBB_scan(new open3d::geometry::OrientedBoundingBox);
 
-    /// 当前baselink到odom(camera_init)和map坐标系的关系
+    /// 当前baselink到odom和map坐标系的关系
     Eigen::Matrix4d mat_baselink2odom_cur = Eigen::Matrix4d::Identity();
     Eigen::Matrix4d mat_baselink2map_cur = Eigen::Matrix4d::Identity();
 

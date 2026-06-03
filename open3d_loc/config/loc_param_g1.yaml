@@ -1,11 +1,46 @@
 global_localization_node:
   ros__parameters:
+    path_map: "/home/kangneng/xq/pcd/map1-2/global_map_downsize_rotate.pcd"
+
+    pcd_queue_maxsize: 10
+    loc_frequence: 2.5
+    save_scan: false
+    hidden_removal: false
+
+    # map publish. Set <= 0 to publish only once with transient_local QoS.
+    map_publish_interval: 5.0
+
+    # Downsample and ICP parameters.
+    voxelsize_coarse: 0.2
+    voxelsize_fine: 0.2
+    voxel_downsample_size: 0.1
+    icp_distance_threshold: 0.15
+    fitness_eval_threshold: 0.15
+    normal_search_radius: 0.4
+
+    threshold_fitness: 0.5
+    threshold_fitness_init: 0.5
+    max_icp_translation: 0.4
+    max_icp_yaw_deg: 1.5
+    max_init_icp_translation: 2.0
+    max_init_icp_yaw_deg: 15.0
+    min_init_fitness_improvement: 0.02
+    min_source_points: 500
+    min_target_points: 20000
+    maxpoints_source: 80000
+    maxpoints_target: 400000
+
+    filter_odom2map: false
+    kalman_processVar2: 0.001
+    kalman_estimatedMeasVar2: 0.02
+    confidence_loc_th: 0.7
+    dis_updatemap: 3.5
+
     # x, y, z, roll, pitch, yaw (单位:度degrees)
     initialpose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     # 静态 TF: x, y, z, qx, qy, qz, qw
-    static_tf_odom_to_camera_init: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-    static_tf_imu_link_to_base_link: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    static_tf_base_link_to_imu_link: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
     static_tf_base_link_to_motion_link: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
     kf_baselink2map:

@@ -140,7 +140,7 @@ private:
     Eigen::Matrix4d mat_baselink2motionlink_;
 
     /// @brief imulink到baselink
-    Eigen::Matrix4d mat_imulink2baselink_;
+    Eigen::Matrix4d mat_baselink2imulink_;
 
     /// @brief 初始位姿, x, y, z, roll, pitch, yaw (单位:度degrees)
     std::vector<double> initialpose_;
@@ -190,6 +190,8 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_scan_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_scan2map_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_submap_;
+    rclcpp::TimerBase::SharedPtr map_publish_timer_;
+    sensor_msgs::msg::PointCloud2 map_msg_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_localization_3d_;
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr pub_localization_3d_confidence_;
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr pub_localization_3d_delay_ms_;
