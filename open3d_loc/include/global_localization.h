@@ -17,8 +17,10 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <open3d/Open3D.h>
-#include <queue>
+#include <atomic>
+#include <deque>
 #include <cmath>
+#include <string>
 
 
 class KalmanFilter
@@ -147,15 +149,13 @@ private:
 
     /// @brief 原始地图点云
     std::shared_ptr<open3d::geometry::PointCloud> pcd_map_ori_;
-    std::shared_ptr<open3d::geometry::PointCloud> pcd_map_coarse_;
     std::shared_ptr<open3d::geometry::PointCloud> pcd_map_fine_;
-    std::shared_ptr<open3d::geometry::PointCloud> pcd_map_cur_;
     std::shared_ptr<open3d::geometry::PointCloud> pcd_scan_cur_;
 
-    std::queue<open3d::geometry::PointCloud> que_pcd_scan_;
+    std::deque<std::shared_ptr<open3d::geometry::PointCloud>> que_pcd_scan_;
     int queue_maxsize_;
+    size_t map_points_count_ = 0;
     double voxelsize_coarse_;
-    double voxelsize_fine_;
     double voxel_downsample_size_ = 0.1;
     double icp_distance_threshold_ = 0.15;
     double fitness_eval_threshold_ = 0.15;
@@ -175,8 +175,7 @@ private:
 
     std::thread thread_loc_;
     std::mutex lock_scan_;
-    std::mutex lock_exit_;
-    bool flag_exit_;
+    std::atomic_bool flag_exit_{false};
 
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_baselink2map_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_baselink2map_kalman_;
@@ -204,6 +203,7 @@ private:
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_broadcaster_;
 
     bool save_scan_;
+    std::string save_scan_dir_;
 
     /// @brief 定位频率(定位间隔时间，多少秒1次)
     double loc_frequence_;
@@ -214,10 +214,10 @@ private:
     int maxpoints_target_ = 200000;
 
     /// @brief 初始化成功标志
-    bool loc_initialized_ = false;
+    std::atomic_bool loc_initialized_{false};
 
     /// @brief 当前定位overlap，confidence
-    double loc_fitness_;
+    std::atomic<double> loc_fitness_{0.0};
 
     /// @brief 定位置信度阈值
     double confidence_loc_th_;

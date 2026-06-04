@@ -5,6 +5,7 @@ global_localization_node:
     pcd_queue_maxsize: 10
     loc_frequence: 2.5
     save_scan: false
+    save_scan_dir: "/tmp/open3d_loc_scan_submap"
     hidden_removal: false
 
     # 地图发布频率，单位:秒
@@ -12,7 +13,6 @@ global_localization_node:
 
     # Downsample and ICP parameters.
     voxelsize_coarse: 0.2   # 初步下采样体素大小
-    voxelsize_fine: 0.2     # 精细下采样体素大小（地图本身就是0.2m的）
     voxel_downsample_size: 0.1
     icp_distance_threshold: 0.15    # icp的时候最近点的距离阈值
     fitness_eval_threshold: 0.15    # 评估icp结果的fitness时，最近点的距离阈值，过大可能导致错误的高fitness，过小可能导致正确的低fitness

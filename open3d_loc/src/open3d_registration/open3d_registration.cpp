@@ -87,7 +87,6 @@ namespace pcd_tools
             double icp_threshold_;
         };
 
-        std::chrono::high_resolution_clock::time_point preprocess_all_s = std::chrono::high_resolution_clock::now();
         std::vector<PcdPair> vec_pcd_pair;
 
         for (std::size_t scale_i = 0; scale_i < scale.size(); ++scale_i)
@@ -102,16 +101,11 @@ namespace pcd_tools
         // vec_pcd
         auto pcd_preprocess = [&](int pcd_i)
         {
-            std::chrono::high_resolution_clock::time_point preprocess_s = std::chrono::high_resolution_clock::now();
             double voxel_size_ = vec_pcd_pair[pcd_i].voxel_size_;
-            std::cout << "scale i: " << pcd_i << " voxel_size: " << voxel_size_ << std::endl;
             vec_pcd_pair[pcd_i].pcd_src = source->VoxelDownSample(voxel_size_);
             vec_pcd_pair[pcd_i].pcd_tgt = target->VoxelDownSample(voxel_size_);
             vec_pcd_pair[pcd_i].pcd_tgt->EstimateNormals(
                 open3d::geometry::KDTreeSearchParamHybrid(voxel_size_ * 2, 30));
-
-            std::chrono::high_resolution_clock::time_point preprocess_e = std::chrono::high_resolution_clock::now();
-            auto preprocess_cost = std::chrono::duration_cast<std::chrono::milliseconds>(preprocess_e - preprocess_s).count();
         };
 
         std::vector<std::thread> thread_preprocess;
@@ -123,15 +117,11 @@ namespace pcd_tools
         {
             t.join();
         }
-        std::chrono::high_resolution_clock::time_point preprocess_all_e = std::chrono::high_resolution_clock::now();
-        auto preprocess_all_cost = std::chrono::duration_cast<std::chrono::milliseconds>(preprocess_all_e - preprocess_all_s).count();
-
         // /*配准*/
         open3d::pipelines::registration::RegistrationResult registration_result;
         int count_icp = 0;
         Eigen::Matrix4d matrix_icp = Eigen::Matrix4d::Identity();
         // 使用最大的阈值开始多次配准，每次阈值为上次的0.6，直到阈值小于0.5*voxel_size
-        std::chrono::high_resolution_clock::time_point icp_s = std::chrono::high_resolution_clock::now();
 
         double icp_threshold_current;
         for (int icp_i = 0; icp_i < num_pair; ++icp_i)
@@ -143,9 +133,6 @@ namespace pcd_tools
             registration_result = RegistrationIcp(src, tgt, icp_threshold_current, matrix_icp, icp_method, 30);
             matrix_icp = registration_result.transformation_ * matrix_icp;
         }
-        std::chrono::high_resolution_clock::time_point icp_e = std::chrono::high_resolution_clock::now();
-        auto icp_cost = std::chrono::duration_cast<std::chrono::milliseconds>(icp_e - icp_s).count();
-
         return matrix_icp;
     }
 
@@ -332,12 +319,10 @@ namespace pcd_tools
         target.reset(new open3d::geometry::PointCloud);
         *source = *source_ori;
         *target = *target_ori;
-        std::chrono::high_resolution_clock::time_point start_time = std::chrono::high_resolution_clock::now();
         source->Transform(initial_matrix);
 
         if (use_fpfh)
         {
-            std::chrono::high_resolution_clock::time_point fpfh_time_s = std::chrono::high_resolution_clock::now();
             // 点云预处理
             std::tie(source, source_fpfh) = PreprocessPointCloud(source, voxel_size, statistical_filter_source, *CropBox_source);
             std::tie(target, target_fpfh) = PreprocessPointCloud(target, voxel_size, statistical_filter_target, *CropBox_target);
@@ -346,22 +331,18 @@ namespace pcd_tools
             open3d::pipelines::registration::RegistrationResult registration_result;
             registration_result = pcd_tools::RegistrationFpfh(source, target, source_fpfh, target_fpfh, voxel_size, seed_, true);
             fpfh_matrix = registration_result.transformation_;
-            std::chrono::high_resolution_clock::time_point fpfh_time_e = std::chrono::high_resolution_clock::now();
         }
 
         if (use_icp)
         {
-            std::chrono::high_resolution_clock::time_point icp_time_s = std::chrono::high_resolution_clock::now();
             source->Transform(fpfh_matrix);
             icp_matrix = pcd_tools::RegistrationMultiScaleIcp(source, target, voxel_size, icp_method);
             final_transformation = icp_matrix * fpfh_matrix * initial_matrix;
-            std::chrono::high_resolution_clock::time_point icp_time_e = std::chrono::high_resolution_clock::now();
         }
 
         // 计算最终的结果
         regresult = RegistrationEvaluate(source_ori, target_ori, voxel_size, final_transformation);
         overlap = regresult.fitness_;
-        std::chrono::high_resolution_clock::time_point total_time = std::chrono::high_resolution_clock::now();
 
         return true;
     }

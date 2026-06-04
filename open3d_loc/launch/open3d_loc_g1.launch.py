@@ -1,17 +1,20 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
+from ament_index_python.packages import get_package_share_directory
+import glob
+import os
 
 
 def generate_launch_description():
     # 获取包路径
-    open3d_loc_share = FindPackageShare('open3d_loc')
-    log_dir = PathJoinSubstitution([
-        open3d_loc_share,
-        'log'
-    ])
+    open3d_loc_share = get_package_share_directory('open3d_loc')
+    workspace_root = open3d_loc_share.split('/install/')[0] if '/install/' in open3d_loc_share else ''
+    source_candidates = glob.glob(os.path.join(workspace_root, 'src', '**', 'open3d_loc'), recursive=True)
+    open3d_loc_dir = source_candidates[0] if source_candidates else open3d_loc_share
+    log_dir = os.path.join(open3d_loc_dir, 'log')
+    os.makedirs(log_dir, exist_ok=True)
 
     ros_log_dir = SetEnvironmentVariable('ROS_LOG_DIR', log_dir)
 
@@ -23,11 +26,7 @@ def generate_launch_description():
     )
 
     # 配置文件路径
-    config_file = PathJoinSubstitution([
-        open3d_loc_share,
-        'config',
-        'loc_param_g1.yaml'
-    ])
+    config_file = os.path.join(open3d_loc_share, 'config', 'loc_param_g1.yaml')
 
     # 全局定位节点
     global_localization_node = Node(
