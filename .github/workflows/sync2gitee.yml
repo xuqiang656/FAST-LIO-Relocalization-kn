@@ -2,6 +2,7 @@
 name: sync2gitee
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - humble
@@ -34,3 +35,4 @@ jobs:
           account_type: user
           # 直接取当前项目的仓库名
           static_list: ${{ github.event.repository.name }}
+          debug: true
