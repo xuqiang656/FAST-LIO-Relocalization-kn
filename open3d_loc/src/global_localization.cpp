@@ -46,6 +46,7 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
 
     loc_frequence_ = 2.0; //
     loc_fitness_.store(0.0);
+
     // 注册回调函数
     sub_baselink2odom_ = this->create_subscription<nav_msgs::msg::Odometry>(
         "/Odometry_loc", 50, std::bind(&GloabalLocalization::CallbackBaselink2Odom, this, std::placeholders::_1));
@@ -57,6 +58,7 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     pose_baselink2odom_ = nav_msgs::msg::Odometry();
     pose_baselink2odom_.header.frame_id = "odom";
     pose_baselink2odom_.child_frame_id = "base_link";
+    
     // geometry_msgs的Quaternion会被初始化为0,0,0,0,而不是正确的0,0,0,1
     pose_baselink2odom_.pose.pose.orientation.w = 1;
     RCLCPP_INFO(this->get_logger(), "pose baselink2odom:\nx: %f, y: %f, z: %f, qx: %f, \
