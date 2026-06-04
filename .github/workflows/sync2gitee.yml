@@ -19,9 +19,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: check sync config
+        run: |
+          test -n "$dst_key" || { echo "GITEE_PRIVATE_KEY is missing"; exit 1; }
+          test -n "$dst_token" || { echo "GITEE_TOKEN is missing"; exit 1; }
+          test -n "$gitee_user" || { echo "GITEE_USER is missing"; exit 1; }
+          echo "Sync target: gitee/${gitee_user}/${GITHUB_REPOSITORY#*/}"
+
       - name: sync github -> gitee
         uses: Yikun/hub-mirror-action@master
-        if: ${{ env.dst_key != '' && env.dst_token != '' && env.gitee_user != '' }}
         with:
           # 必选，需要同步的 GitHub 用户（源）
           src: github/${{ github.repository_owner }}
