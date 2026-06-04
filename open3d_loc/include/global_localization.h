@@ -80,7 +80,7 @@ public:
     ~GloabalLocalization();
 
     /// @brief 初始化定位
-    void LocalizationInitialize();
+    bool LocalizationInitialize();
 
     /// @brief 订阅fast_lio里程计信息
     void CallbackBaselink2Odom(const nav_msgs::msg::Odometry::SharedPtr baselink2odom);

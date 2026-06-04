@@ -545,7 +545,7 @@ void GloabalLocalization::CallbackScan(
     }
 }
 
-void GloabalLocalization::LocalizationInitialize()
+bool GloabalLocalization::LocalizationInitialize()
 {
     /// 裁剪后的地图
     std::shared_ptr<open3d::geometry::PointCloud> map_fine_crop(new open3d::geometry::PointCloud);
@@ -576,6 +576,7 @@ void GloabalLocalization::LocalizationInitialize()
     double fitness_initial; /// overlap
     double loc_cost = 0;    /// 定位耗时(ms)
     int count_success = 0;
+    bool init_success = false;
     while (rclcpp::ok() && !flag_exit_.load())
     {
         auto loc_s = std::chrono::high_resolution_clock::now(); /// 开始定位计时
@@ -610,36 +611,35 @@ void GloabalLocalization::LocalizationInitialize()
 
             /// 配准计时
             target = map_fine_crop;
-            RCLCPP_INFO(this->get_logger(), "before sample, target size: %zu, has normal: %s",
-                        target->points_.size(), target->HasNormals() ? "true" : "false");
+            const size_t target_before_sample_size = target->points_.size();
             if (target->points_.size() > static_cast<size_t>(maxpoints_target_))
             {
                 target = target->RandomDownSample(double(maxpoints_target_) / target->points_.size());
             }
-            RCLCPP_INFO(this->get_logger(), "after sample, target size: %zu, has normal: %s",
-                        target->points_.size(), target->HasNormals() ? "true" : "false");
+            const size_t target_after_sample_size = target->points_.size();
 
             source = pcd_scan->Crop(*OBB_scan);
-            RCLCPP_INFO(this->get_logger(), "before voxel downsample, source size: %zu, has normal: %s",
-                        source->points_.size(), source->HasNormals() ? "true" : "false");
+            const size_t source_before_voxel_size = source->points_.size();
             source = source->VoxelDownSample(voxel_downsample_size_);
-            RCLCPP_INFO(this->get_logger(), "after voxel downsample, source size: %zu, has normal: %s",
-                        source->points_.size(), source->HasNormals() ? "true" : "false");
+            const size_t source_after_voxel_size = source->points_.size();
             if (source->points_.size() > static_cast<size_t>(maxpoints_source_))
             {
                 source = source->RandomDownSample(double(maxpoints_source_) / source->points_.size());
             }
-            RCLCPP_INFO(this->get_logger(), "after sample, source size: %zu, has normal: %s",
-                        source->points_.size(), source->HasNormals() ? "true" : "false");
+            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                  "init preprocess: target=%zu->%zu, source=%zu->%zu->%zu, target_has_normal=%s, source_has_normal=%s",
+                                  target_before_sample_size, target_after_sample_size,
+                                  source_before_voxel_size, source_after_voxel_size, source->points_.size(),
+                                  target->HasNormals() ? "true" : "false", source->HasNormals() ? "true" : "false");
 
             if (source->points_.size() < static_cast<size_t>(min_source_points_) ||
                 target->points_.size() < static_cast<size_t>(min_target_points_))
             {
-                RCLCPP_WARN(this->get_logger(),
-                            "skip init icp: source=%zu (min=%d), target=%zu (min=%d), map_center=(%.3f, %.3f, %.3f), scan_center=(%.3f, %.3f, %.3f)",
-                            source->points_.size(), min_source_points_, target->points_.size(), min_target_points_,
-                            OBB_map->center_.x(), OBB_map->center_.y(), OBB_map->center_.z(),
-                            OBB_scan->center_.x(), OBB_scan->center_.y(), OBB_scan->center_.z());
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                     "skip init icp: source=%zu (min=%d), target=%zu (min=%d), map_center=(%.3f, %.3f, %.3f), scan_center=(%.3f, %.3f, %.3f)",
+                                     source->points_.size(), min_source_points_, target->points_.size(), min_target_points_,
+                                     OBB_map->center_.x(), OBB_map->center_.y(), OBB_map->center_.z(),
+                                     OBB_scan->center_.x(), OBB_scan->center_.y(), OBB_scan->center_.z());
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 continue;
             }
@@ -647,8 +647,9 @@ void GloabalLocalization::LocalizationInitialize()
             source->Transform(reg_matrix);
             *pcd_scan2map = *source;
             auto eva_before_icp = open3d::pipelines::registration::EvaluateRegistration(*source, *target, fitness_eval_threshold_);
-            RCLCPP_INFO(this->get_logger(), "init before icp: eva_fitness=%f, inlier_rmse=%f, eval_threshold=%.3f",
-                        eva_before_icp.fitness_, eva_before_icp.inlier_rmse_, fitness_eval_threshold_);
+            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                  "init before icp: eva_fitness=%f, inlier_rmse=%f, eval_threshold=%.3f",
+                                  eva_before_icp.fitness_, eva_before_icp.inlier_rmse_, fitness_eval_threshold_);
 
             auto multiScale_reg_matrix = pcd_tools::RegistrationMultiScaleIcp(source, target, voxel_downsample_size_, 1, {1, 2, 4});
             reg_matrix = multiScale_reg_matrix * reg_matrix;
@@ -656,10 +657,10 @@ void GloabalLocalization::LocalizationInitialize()
             auto eva_result_coarse = open3d::pipelines::registration::EvaluateRegistration(*source, *target, fitness_eval_threshold_);
             double init_delta_trans = multiScale_reg_matrix.block<3, 1>(0, 3).norm();
             double init_delta_yaw = std::atan2(multiScale_reg_matrix(1, 0), multiScale_reg_matrix(0, 0)) * 180.0 / M_PI;
-            RCLCPP_INFO(this->get_logger(),
-                        "init icp result: eva_before=%f, eva_after=%f, inlier_rmse=%f, delta_trans=%.3f, delta_yaw_deg=%.3f, threshold_fitness_init=%.3f, max_init_icp_translation=%.3f, max_init_icp_yaw_deg=%.3f",
-                        eva_before_icp.fitness_, eva_result_coarse.fitness_, eva_result_coarse.inlier_rmse_,
-                        init_delta_trans, init_delta_yaw, threshold_fitness_init_, max_init_icp_translation_, max_init_icp_yaw_deg_);
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                 "init icp result: eva_before=%f, eva_after=%f, inlier_rmse=%f, delta_trans=%.3f, delta_yaw_deg=%.3f, threshold_fitness_init=%.3f, max_init_icp_translation=%.3f, max_init_icp_yaw_deg=%.3f",
+                                 eva_before_icp.fitness_, eva_result_coarse.fitness_, eva_result_coarse.inlier_rmse_,
+                                 init_delta_trans, init_delta_yaw, threshold_fitness_init_, max_init_icp_translation_, max_init_icp_yaw_deg_);
             fitness_initial = eva_result_coarse.fitness_;
             *pcd_scan2map = *source;
 
@@ -682,16 +683,17 @@ void GloabalLocalization::LocalizationInitialize()
             }
             else
             {
-                RCLCPP_WARN(this->get_logger(),
-                            "reject init icp: eva_before=%f, eva_after=%f, threshold=%.3f, improvement=%f, min_improvement=%.3f, delta_trans=%.3f, max_delta=%.3f, delta_yaw_deg=%.3f, max_yaw_deg=%.3f, source=%zu, target=%zu",
-                            eva_before_icp.fitness_, fitness_initial, threshold_fitness_init_,
-                            fitness_initial - eva_before_icp.fitness_, min_init_fitness_improvement_,
-                            init_delta_trans, max_init_icp_translation_, init_delta_yaw, max_init_icp_yaw_deg_,
-                            source->points_.size(), target->points_.size());
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                     "reject init icp: eva_before=%f, eva_after=%f, threshold=%.3f, improvement=%f, min_improvement=%.3f, delta_trans=%.3f, max_delta=%.3f, delta_yaw_deg=%.3f, max_yaw_deg=%.3f, source=%zu, target=%zu",
+                                     eva_before_icp.fitness_, fitness_initial, threshold_fitness_init_,
+                                     fitness_initial - eva_before_icp.fitness_, min_init_fitness_improvement_,
+                                     init_delta_trans, max_init_icp_translation_, init_delta_yaw, max_init_icp_yaw_deg_,
+                                     source->points_.size(), target->points_.size());
             }
             auto loc_e = std::chrono::high_resolution_clock::now(); /// 结束定位计时
             loc_cost = std::chrono::duration_cast<std::chrono::microseconds>(loc_e - loc_s).count() / 1000.0;
-            RCLCPP_INFO(this->get_logger(), "localization cost: %f ms", loc_cost);
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                 "init localization cost: %.3f ms", loc_cost);
 
             if (accept_init)
             {
@@ -699,6 +701,7 @@ void GloabalLocalization::LocalizationInitialize()
                 /// 连续两次定位成功后定位初始化成功
                 if (count_success >= 2)
                 {
+                    init_success = true;
                     break;
                 }
             }
@@ -709,7 +712,14 @@ void GloabalLocalization::LocalizationInitialize()
         }
     }
 
-    RCLCPP_INFO(this->get_logger(), "\n\n\nlocalization initialize success!!!!\n\n\n");
+    if (!init_success)
+    {
+        RCLCPP_WARN(this->get_logger(), "localization initialize stopped before success");
+        return false;
+    }
+
+    RCLCPP_INFO(this->get_logger(), "localization initialize success");
+    return true;
 }
 void GloabalLocalization::Localization()
 {
@@ -766,7 +776,10 @@ void GloabalLocalization::Localization()
                 mat_initialpose_(0, 3), mat_initialpose_(1, 3), mat_initialpose_(2, 3),
                 mat_baselink2odom_init(0, 3), mat_baselink2odom_init(1, 3), mat_baselink2odom_init(2, 3),
                 mat_odom2map_init(0, 3), mat_odom2map_init(1, 3), mat_odom2map_init(2, 3));
-    LocalizationInitialize();
+    if (!LocalizationInitialize())
+    {
+        return;
+    }
 
     /// 卡尔曼滤波初始化
     /// 使用当前 baselink2map 位置初始化卡尔曼滤波器
@@ -859,14 +872,14 @@ void GloabalLocalization::Localization()
         if (time_diff_loc < loc_frequence_)
         {
             int wait_time = int((loc_frequence_ - time_diff_loc) * 1000);
-            RCLCPP_INFO(this->get_logger(), "\n\ntime_this_loc: %f, time_last: %f,\ntime_diff: %f s, sleep %d ms",
-                        std::chrono::duration_cast<std::chrono::milliseconds>(time_this_loc.time_since_epoch()).count() / 1000.0,
-                        std::chrono::duration_cast<std::chrono::milliseconds>(time_last_loc.time_since_epoch()).count() / 1000.0, time_diff_loc, wait_time);
+            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                  "tracking wait: time_diff=%.3f s, sleep %d ms", time_diff_loc, wait_time);
             std::this_thread::sleep_for(std::chrono::milliseconds(wait_time));
         }
         else
         {
-            RCLCPP_INFO(this->get_logger(), "\n\ntime_diff:%f s, localization right now", time_diff_loc);
+            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                  "tracking run now: time_diff=%.3f s", time_diff_loc);
         }
         auto loc_s = std::chrono::high_resolution_clock::now(); /// 开始定位计时
 
@@ -908,8 +921,8 @@ void GloabalLocalization::Localization()
             {
                 auto submap_s = std::chrono::high_resolution_clock::now();
 
-                RCLCPP_INFO(this->get_logger(), "\n***\n****\n***\n\n\nlast map update loc: x: %f, y: %f, z%f,\n\
-                now loc: x: %f, y: %f, z%f, 3d distance: %f, now needpdate submap",
+                RCLCPP_INFO(this->get_logger(),
+                            "update submap: last=(%.3f, %.3f, %.3f), current=(%.3f, %.3f, %.3f), distance=%.3f",
                             last_loc_.x(), last_loc_.y(), last_loc_.z(), cur_loc.x(), cur_loc.y(), cur_loc.z(), dis_motion);
                 last_loc_ = cur_loc;
                 OBB_map->center_ = mat_baselink2map_cur.block<3, 1>(0, 3);
@@ -920,50 +933,50 @@ void GloabalLocalization::Localization()
 
                 auto submap_e = std::chrono::high_resolution_clock::now();
                 auto submap_cost = std::chrono::duration_cast<std::chrono::microseconds>(submap_e - submap_s).count() / 1000.0;
-                RCLCPP_INFO(this->get_logger(), "submap_cost: %f ms", submap_cost);
+                RCLCPP_DEBUG(this->get_logger(), "submap_cost: %.3f ms", submap_cost);
             }
 
             OBB_scan->center_ = mat_baselink2odom_cur.block<3, 1>(0, 3);
             OBB_scan->R_ = mat_baselink2odom_cur.block<3, 3>(0, 0);
 
             target = map_fine_crop;
-            RCLCPP_INFO(this->get_logger(), "before sample, target size: %zu, has normal: %s",
-                        target->points_.size(), target->HasNormals() ? "true" : "false");
+            const size_t target_before_sample_size = target->points_.size();
             if (target->points_.size() > static_cast<size_t>(maxpoints_target_))
             {
                 target = target->RandomDownSample(double(maxpoints_target_) / target->points_.size());
             }
-            RCLCPP_INFO(this->get_logger(), "after sample, target size: %zu, has normal: %s",
-                        target->points_.size(), target->HasNormals() ? "true" : "false");
+            const size_t target_after_sample_size = target->points_.size();
 
             source = pcd_scan->Crop(*OBB_scan);
-            RCLCPP_INFO(this->get_logger(), "source size: %zu, maxpoints_source_: %d",
-                        source->points_.size(), maxpoints_source_);
+            const size_t source_before_voxel_size = source->points_.size();
             source = source->VoxelDownSample(voxel_downsample_size_);
-            RCLCPP_INFO(this->get_logger(), "source size after voxel downsample %.3f: %zu",
-                        voxel_downsample_size_, source->points_.size());
+            const size_t source_after_voxel_size = source->points_.size();
             if (source->points_.size() > static_cast<size_t>(maxpoints_source_))
             {
                 source = source->RandomDownSample(double(maxpoints_source_) / source->points_.size());
             }
-            RCLCPP_INFO(this->get_logger(), "after prerpocess: %zu", source->points_.size());
+            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                  "tracking preprocess: target=%zu->%zu, source=%zu->%zu->%zu, voxel=%.3f",
+                                  target_before_sample_size, target_after_sample_size,
+                                  source_before_voxel_size, source_after_voxel_size, source->points_.size(),
+                                  voxel_downsample_size_);
 
             if (source->points_.size() < static_cast<size_t>(min_source_points_) ||
                 target->points_.size() < static_cast<size_t>(min_target_points_))
             {
-                RCLCPP_WARN(this->get_logger(),
-                            "skip tracking icp: source=%zu (min=%d), target=%zu (min=%d), map_center=(%.3f, %.3f, %.3f), scan_center=(%.3f, %.3f, %.3f)",
-                            source->points_.size(), min_source_points_, target->points_.size(), min_target_points_,
-                            OBB_map->center_.x(), OBB_map->center_.y(), OBB_map->center_.z(),
-                            OBB_scan->center_.x(), OBB_scan->center_.y(), OBB_scan->center_.z());
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                     "skip tracking icp: source=%zu (min=%d), target=%zu (min=%d), map_center=(%.3f, %.3f, %.3f), scan_center=(%.3f, %.3f, %.3f)",
+                                     source->points_.size(), min_source_points_, target->points_.size(), min_target_points_,
+                                     OBB_map->center_.x(), OBB_map->center_.y(), OBB_map->center_.z(),
+                                     OBB_scan->center_.x(), OBB_scan->center_.y(), OBB_scan->center_.z());
                 continue;
             }
 
             auto eva_before_icp = open3d::pipelines::registration::EvaluateRegistration(*source, *target, fitness_eval_threshold_, reg_matrix);
-            RCLCPP_INFO(this->get_logger(),
-                        "tracking before icp: eva_fitness=%f, inlier_rmse=%f, eval_threshold=%.3f, source=%zu, target=%zu",
-                        eva_before_icp.fitness_, eva_before_icp.inlier_rmse_, fitness_eval_threshold_,
-                        source->points_.size(), target->points_.size());
+            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                  "tracking before icp: eva_fitness=%f, inlier_rmse=%f, eval_threshold=%.3f, source=%zu, target=%zu",
+                                  eva_before_icp.fitness_, eva_before_icp.inlier_rmse_, fitness_eval_threshold_,
+                                  source->points_.size(), target->points_.size());
 
             auto reg_result2 = pcd_tools::RegistrationIcp(source, target, icp_distance_threshold_, reg_matrix, 1);
             reg_matrix = reg_result2.transformation_ * reg_matrix;
@@ -972,10 +985,10 @@ void GloabalLocalization::Localization()
             loc_fitness_.store(eva_result2.fitness_);
             double delta_trans = reg_result2.transformation_.block<3, 1>(0, 3).norm();
             double delta_yaw = std::atan2(reg_result2.transformation_(1, 0), reg_result2.transformation_(0, 0)) * 180.0 / M_PI;
-            RCLCPP_INFO(this->get_logger(),
-                        "tracking icp result: reg_fitness=%f, eva_before=%f, eva_after=%f, inlier_rmse=%f, delta_trans=%.3f, delta_yaw_deg=%.3f, icp_threshold=%.3f, eval_threshold=%.3f",
-                        reg_result2.fitness_, eva_before_icp.fitness_, eva_result2.fitness_, reg_result2.inlier_rmse_,
-                        delta_trans, delta_yaw, icp_distance_threshold_, fitness_eval_threshold_);
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                 "tracking icp result: reg_fitness=%f, eva_before=%f, eva_after=%f, inlier_rmse=%f, delta_trans=%.3f, delta_yaw_deg=%.3f, icp_threshold=%.3f, eval_threshold=%.3f",
+                                 reg_result2.fitness_, eva_before_icp.fitness_, eva_result2.fitness_, reg_result2.inlier_rmse_,
+                                 delta_trans, delta_yaw, icp_distance_threshold_, fitness_eval_threshold_);
             /// 超过阈值才更新,防止因配准结果有问题而导致定位出问题
             const double loc_fitness = loc_fitness_.load();
             bool accept_tracking = loc_fitness > threshold_fitness_ &&
@@ -988,10 +1001,10 @@ void GloabalLocalization::Localization()
             }
             else
             {
-                RCLCPP_WARN(this->get_logger(),
-                            "reject tracking icp: eva_fitness=%f, threshold=%.3f, delta_trans=%.3f, max_delta=%.3f, delta_yaw_deg=%.3f, max_yaw_deg=%.3f, source=%zu, target=%zu",
-                            loc_fitness, threshold_fitness_, delta_trans, max_icp_translation_, delta_yaw, max_icp_yaw_deg_,
-                            source->points_.size(), target->points_.size());
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                     "reject tracking icp: eva_fitness=%f, threshold=%.3f, delta_trans=%.3f, max_delta=%.3f, delta_yaw_deg=%.3f, max_yaw_deg=%.3f, source=%zu, target=%zu",
+                                     loc_fitness, threshold_fitness_, delta_trans, max_icp_translation_, delta_yaw, max_icp_yaw_deg_,
+                                     source->points_.size(), target->points_.size());
             }
 
             // save_path
@@ -1007,7 +1020,8 @@ void GloabalLocalization::Localization()
             auto loc_e = std::chrono::high_resolution_clock::now(); /// 结束定位计时
             time_last_loc = loc_e;
             loc_cost = std::chrono::duration_cast<std::chrono::microseconds>(loc_e - loc_s).count() / 1000.0;
-            RCLCPP_INFO(this->get_logger(), "localization cost: %f ms", loc_cost);
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                 "tracking localization cost: %.3f ms", loc_cost);
         }
     }
 }
