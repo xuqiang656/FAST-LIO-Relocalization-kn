@@ -24,6 +24,11 @@ def generate_launch_description():
         default_value='false',
         description='Use simulation time'
     )
+    stamp_outputs_with_node_time_arg = DeclareLaunchArgument(
+        'stamp_outputs_with_node_time',
+        default_value='false',
+        description='Stamp localization TF and output topics with node time. Use true for rosbag playback when input header stamps are in a different time domain.'
+    )
 
     # 配置文件路径
     config_file = os.path.join(open3d_loc_share, 'config', 'loc_param_g1.yaml')
@@ -37,7 +42,8 @@ def generate_launch_description():
         parameters=[
             config_file,
             {
-                'use_sim_time': LaunchConfiguration('use_sim_time')
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'stamp_outputs_with_node_time': LaunchConfiguration('stamp_outputs_with_node_time')
             }
         ]
     )
@@ -45,5 +51,6 @@ def generate_launch_description():
     return LaunchDescription([
         ros_log_dir,
         use_sim_time_arg,
+        stamp_outputs_with_node_time_arg,
         global_localization_node,
     ])

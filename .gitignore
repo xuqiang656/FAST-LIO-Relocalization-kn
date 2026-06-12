@@ -4,7 +4,6 @@ __pycache__/
 
 # Runtime logs
 open3d_loc/log/
-FAST_LIO/Log/
 
 # Generated point clouds and data
 FAST_LIO/PCD/

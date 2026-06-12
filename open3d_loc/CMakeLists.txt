@@ -38,10 +38,16 @@ find_package(PCL REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem system)
 
-# Set Open3D path - modify this to your installation path
-set(Open3D_DIR "/home/kangneng/xq/code/thirdparty/open3d141/lib/cmake/Open3D")
+# Set Open3D path. Deployment passes -DOpen3D_DIR from Dockerfile, and local
+# development can pass -DOpen3D_DIR=... or export Open3D_DIR.
+if(NOT DEFINED Open3D_DIR)
+        if(DEFINED ENV{Open3D_DIR})
+                set(Open3D_DIR "$ENV{Open3D_DIR}")
+        else()
+                set(Open3D_DIR "/home/code/thirdparty/open3d141/lib/cmake/Open3D")
+        endif()
+endif()
 
-# set(Open3D_DIR "/home/unitree/open3d141_arm/open3d141/lib/cmake/Open3D")
 find_package(Open3D REQUIRED)
 
 # Fix Open3D libraries - remove problematic .so files

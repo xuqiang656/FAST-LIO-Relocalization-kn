@@ -1,15 +1,18 @@
 global_localization_node:
   ros__parameters:
-    path_map: "/home/kangneng/xq/pcd/map1-2/global_map_downsize_rotate.pcd"
+    # path_map: "/home/nav_map/nav_test/global_map_downsize.pcd"
+    # path_map: "/home/kangneng/xq/pcd/map1-2/global_map_downsize.pcd"
+    path_map: "/home/kangneng/xq/map/pcd/map1-2/global_map_downsize.pcd"
+    path_imu_to_base: "/home/kangneng/xq/map/pcd/map1-2/imu_to_base_origin.txt"
 
     pcd_queue_maxsize: 10
     loc_frequence: 2.5
-    save_scan: false
-    save_scan_dir: "/tmp/open3d_loc_scan_submap"
-    hidden_removal: false
 
     # 地图发布频率，单位:秒
     map_publish_interval: 5.0     
+    # Bag playback helper: stamp map->odom, odom->base_link, /scan_base_link,
+    # and /localization_3d with node time (/clock when use_sim_time=true).
+    stamp_outputs_with_node_time: false
 
     # Downsample and ICP parameters.
     voxelsize_coarse: 0.2   # 初步下采样体素大小
@@ -26,24 +29,15 @@ global_localization_node:
     max_init_icp_yaw_deg: 15.0      # 全局定位时icp的最大yaw约束，单位是度，
     min_init_fitness_improvement: 0.02    # 全局定位时，初始icp的fitness必须比RANSAC的fitness至少提高这个值才接受icp结果，
     min_source_points: 500
-    min_target_points: 20000
+    min_target_points: 500
     maxpoints_source: 80000
     maxpoints_target: 400000
 
-    filter_odom2map: false
-    kalman_processVar2: 0.001
-    kalman_estimatedMeasVar2: 0.02
-    confidence_loc_th: 0.7
     dis_updatemap: 3.5
 
     # x, y, z, roll, pitch, yaw (单位:度degrees)
     initialpose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     # 静态 TF: x, y, z, qx, qy, qz, qw
-    static_tf_base_link_to_imu_link: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    static_tf_base_link_to_imu_link: [0.200000, 0.000000, 0.000000, 0.010145, 0.135211, -0.001385, 0.990764]
     static_tf_base_link_to_motion_link: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-
-    kf_baselink2map:
-      x: [0.001, 0.002]
-      y: [0.001, 0.005]
-      z: [0.00001, 0.04]
