@@ -75,5 +75,5 @@ def generate_launch_description():
         stamp_outputs_with_node_time_arg,
         fast_lio_launch,
         open3d_loc_launch,
-        rviz_node
+        # rviz_node
     ])

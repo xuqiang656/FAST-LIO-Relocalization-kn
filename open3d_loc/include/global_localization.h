@@ -31,8 +31,8 @@ public:
     /// @brief 初始化定位
     bool LocalizationInitialize();
 
-    /// @brief 订阅fast_lio里程计信息
-    void CallbackBaselink2Odom(const nav_msgs::msg::Odometry::SharedPtr baselink2odom);
+    /// @brief 订阅FAST-LIO发布的imu_link在odom下的里程计
+    void CallbackImulink2Odom(const nav_msgs::msg::Odometry::SharedPtr imulink2odom);
     /// @brief 订阅FAST-LIO发布的imu_link点云，先转换成base_link，再转换成odom用于定位匹配
     void CallbackScanBody(const sensor_msgs::msg::PointCloud2::SharedPtr scan_in_imu_link);
 
@@ -55,8 +55,9 @@ public:
     double ComputeMotionDis(const Eigen::Vector3d &a, const Eigen::Vector3d &b);
 
 private:
-    /// @brief 订阅baselink2odom,即fast_lio的里程计信息
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_baselink2odom_;
+    /// 命名约定: Alink2Blink 表示 A_link 在 B_link 下的位姿, 即 T_B_A.
+    /// @brief 订阅imulink2odom,即fast_lio的里程计信息
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_imulink2odom_;
 
     /// @brief 订阅当前帧imu_link点云
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_scan_cur_;
@@ -64,22 +65,22 @@ private:
     /// @brief 订阅初始位姿
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr sub_initialpose_;
 
-    /// @brief bselink到odom的变换矩阵表达
+    /// @brief base_link在odom下的位姿, T_odom_base
     Eigen::Matrix4d mat_baselink2odom_;
-    /// @brief odom到map的矩阵
+    /// @brief odom在map下的位姿, T_map_odom
     Eigen::Matrix4d mat_odom2map_;
-    /// @brief baselink到map = mat_odom2map * mat_baselink2odom
+    /// @brief base_link在map下的位姿, T_map_base = mat_odom2map * mat_baselink2odom
     Eigen::Matrix4d mat_baselink2map_;
     /// @brief initialpose初始位姿
     Eigen::Matrix4d mat_initialpose_;
 
     std::mutex lock_mat_odom2map_;
 
-    /// @brief baselink和运动中心
-    Eigen::Matrix4d mat_baselink2motionlink_;
+    /// @brief motion_link在base_link下的位姿, T_base_motion
+    Eigen::Matrix4d mat_motionlink2baselink_;
 
-    /// @brief imulink到baselink
-    Eigen::Matrix4d mat_baselink2imulink_;
+    /// @brief imu_link在base_link下的位姿, T_base_imu
+    Eigen::Matrix4d mat_imulink2baselink_;
 
     /// @brief 初始位姿, x, y, z, roll, pitch, yaw (单位:度degrees)
     std::vector<double> initialpose_;

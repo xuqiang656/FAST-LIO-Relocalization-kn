@@ -97,7 +97,7 @@ int effct_feat_num = 0, time_log_counter = 0, scan_count = 0, publish_count = 0;
 int iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudValidNum = 0, pcd_save_interval = -1, pcd_index = 0;
 bool point_selected_surf[100000] = {0};
 bool lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
-bool scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
+bool scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false, publish_odom_imu_tf_en = false;
 bool is_first_lidar = true;
 
 vector<vector<int>> pointSearchInd_surf;
@@ -669,8 +669,10 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     trans.transform.rotation.x = odomAftMapped.pose.pose.orientation.x;
     trans.transform.rotation.y = odomAftMapped.pose.pose.orientation.y;
     trans.transform.rotation.z = odomAftMapped.pose.pose.orientation.z;
-    // open3d_loc consumes /Odometry_loc and publishes odom -> base_link.
-    // Do not publish odom -> imu_link here, otherwise imu_link would have two parents.
+    if (publish_odom_imu_tf_en)
+    {
+        tf_br->sendTransform(trans);
+    }
 }
 
 void publish_path(rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath)
@@ -822,6 +824,7 @@ public:
         this->declare_parameter<bool>("publish.scan_publish_en", true);
         this->declare_parameter<bool>("publish.dense_publish_en", true);
         this->declare_parameter<bool>("publish.scan_bodyframe_pub_en", true);
+        this->declare_parameter<bool>("publish.odom_imu_tf_en", false);
         this->declare_parameter<int>("max_iteration", 4);
         this->declare_parameter<string>("map_file_path", "");
         this->declare_parameter<string>("common.lid_topic", "/livox/lidar");
@@ -858,6 +861,7 @@ public:
         this->get_parameter_or<bool>("publish.scan_publish_en", scan_pub_en, true);
         this->get_parameter_or<bool>("publish.dense_publish_en", dense_pub_en, true);
         this->get_parameter_or<bool>("publish.scan_bodyframe_pub_en", scan_body_pub_en, true);
+        this->get_parameter_or<bool>("publish.odom_imu_tf_en", publish_odom_imu_tf_en, false);
         this->get_parameter_or<int>("max_iteration", NUM_MAX_ITERATIONS, 4);
         this->get_parameter_or<string>("map_file_path", map_file_path, "");
         this->get_parameter_or<string>("common.lid_topic", lid_topic, "/livox/lidar");

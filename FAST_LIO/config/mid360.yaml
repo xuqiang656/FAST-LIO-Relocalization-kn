@@ -43,6 +43,7 @@
       scan_publish_en: true # false: close all the point cloud output
       dense_publish_en: false # false: low down the points number in a global-frame point clouds scan.
       scan_bodyframe_pub_en: true # true: output the point cloud scans in IMU-body-frame
+      odom_imu_tf_en: false # true: publish odom -> imu_link TF when debugging FAST-LIO alone; keep false when running with open3d_loc
 
     pcd_save:
       pcd_save_en: false # true: save pcd files; false: do not save pcd files

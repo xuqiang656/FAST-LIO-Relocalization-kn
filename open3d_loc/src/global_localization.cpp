@@ -15,8 +15,8 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node")
     mat_odom2map_ = Eigen::Matrix4d::Identity();
     mat_baselink2map_ = Eigen::Matrix4d::Identity();
     mat_initialpose_ = Eigen::Matrix4d::Identity();
-    mat_baselink2motionlink_ = Eigen::Matrix4d::Identity();
-    mat_baselink2imulink_ = Eigen::Matrix4d::Identity();
+    mat_motionlink2baselink_ = Eigen::Matrix4d::Identity();
+    mat_imulink2baselink_ = Eigen::Matrix4d::Identity();
     last_loc_ = Eigen::Vector3d(0, 0, -5000);
 
     pcd_map_ori_.reset(new open3d::geometry::PointCloud);
@@ -41,8 +41,8 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node")
     loc_fitness_.store(0.0);
 
     // 注册回调函数
-    sub_baselink2odom_ = this->create_subscription<nav_msgs::msg::Odometry>(
-        "/Odometry_loc", 50, std::bind(&GloabalLocalization::CallbackBaselink2Odom, this, std::placeholders::_1));
+    sub_imulink2odom_ = this->create_subscription<nav_msgs::msg::Odometry>(
+        "/Odometry_loc", 50, std::bind(&GloabalLocalization::CallbackImulink2Odom, this, std::placeholders::_1));
     sub_scan_cur_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
         "/cloud_registered_body_1", 50, std::bind(&GloabalLocalization::CallbackScanBody, this, std::placeholders::_1));
     sub_initialpose_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
@@ -336,21 +336,21 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node")
         return false;
     };
 
-    if (load_imu_to_base_from_file(path_imu_to_base, mat_baselink2imulink_))
+    if (load_imu_to_base_from_file(path_imu_to_base, mat_imulink2baselink_))
     {
-        publish_static_tf_from_matrix("base_link", "imu_link", mat_baselink2imulink_, "path_imu_to_base");
+        publish_static_tf_from_matrix("base_link", "imu_link", mat_imulink2baselink_, "path_imu_to_base");
         RCLCPP_INFO(this->get_logger(),
                     "localization source: /cloud_registered_body_1 (imu_link) -> base_link -> odom before registration");
     }
     else
     {
-        publish_static_tf_from_param("static_tf_base_link_to_imu_link", "base_link", "imu_link",
-                                     &mat_baselink2imulink_, publish_static_tf_from_matrix);
+        publish_static_tf_from_param("static_tf_imu_link_to_base_link", "base_link", "imu_link",
+                                     &mat_imulink2baselink_, publish_static_tf_from_matrix);
         RCLCPP_WARN(this->get_logger(),
-                    "path_imu_to_base is not loaded; use static_tf_base_link_to_imu_link for imu_link -> base_link scan transform");
+                    "path_imu_to_base is not loaded; use static_tf_imu_link_to_base_link for imu_link -> base_link scan transform");
     }
-    publish_static_tf_from_param("static_tf_base_link_to_motion_link", "base_link", "motion_link",
-                                 &mat_baselink2motionlink_, publish_static_tf_from_matrix);
+    publish_static_tf_from_param("static_tf_motion_link_to_base_link", "base_link", "motion_link",
+                                 &mat_motionlink2baselink_, publish_static_tf_from_matrix);
 
     RCLCPP_WARN(this->get_logger(), "initialize finished");
 
@@ -379,16 +379,16 @@ Eigen::Matrix3d GloabalLocalization::Euler2Matrix3d(const Eigen::Vector3d euler)
     mat3d = rollAngle * pitchAngle * yawAngle;
     return mat3d;
 }
-void GloabalLocalization::CallbackBaselink2Odom(const nav_msgs::msg::Odometry::SharedPtr baselink2odom)
+void GloabalLocalization::CallbackImulink2Odom(const nav_msgs::msg::Odometry::SharedPtr imulink2odom)
 {
     const rclcpp::Time output_stamp =
-        stamp_outputs_with_node_time_ ? this->now() : rclcpp::Time(baselink2odom->header.stamp);
+        stamp_outputs_with_node_time_ ? this->now() : rclcpp::Time(imulink2odom->header.stamp);
     {
         std::lock_guard<std::mutex> timestamp_lock(lock_timestamp_);
         timestamp_odom_ = output_stamp;
     }
     Eigen::Isometry3d mat_current = Eigen::Isometry3d::Identity();
-    tf2::fromMsg(baselink2odom->pose.pose, mat_current);
+    tf2::fromMsg(imulink2odom->pose.pose, mat_current);
     auto mat_imulink2odom = mat_current.matrix();
 
     Eigen::Matrix4d mat_odom2map_snapshot = Eigen::Matrix4d::Identity();
@@ -396,7 +396,7 @@ void GloabalLocalization::CallbackBaselink2Odom(const nav_msgs::msg::Odometry::S
     Eigen::Matrix4d mat_baselink2map_snapshot = Eigen::Matrix4d::Identity();
     {
         std::lock_guard<std::mutex> state_lock(lock_mat_odom2map_);
-        mat_baselink2odom_ = mat_imulink2odom * mat_baselink2imulink_.inverse();
+        mat_baselink2odom_ = mat_imulink2odom * mat_imulink2baselink_.inverse();
         mat_baselink2map_ = mat_odom2map_ * mat_baselink2odom_;
         mat_odom2map_snapshot = mat_odom2map_;
         mat_baselink2odom_snapshot = mat_baselink2odom_;
@@ -485,7 +485,7 @@ void GloabalLocalization::CallbackBaselink2Odom(const nav_msgs::msg::Odometry::S
     /// 定位初始化完成后发布运动中心定位结果
     if (loc_initialized_.load())
     {
-        Eigen::Matrix4d mat_motionlink2map = mat_baselink2map_snapshot * mat_baselink2motionlink_;
+        Eigen::Matrix4d mat_motionlink2map = mat_baselink2map_snapshot * mat_motionlink2baselink_;
         Eigen::Isometry3d Isometry3d_motionlink2map;
         Isometry3d_motionlink2map.matrix() = mat_motionlink2map;
 
@@ -516,7 +516,7 @@ void GloabalLocalization::CallbackScanBody(
 
     // /cloud_registered_body_1 is expressed in imu_link. Convert it to base_link
     // first, so the map and scan share the same physical body frame convention.
-    pcd_base_link->Transform(mat_baselink2imulink_);
+    pcd_base_link->Transform(mat_imulink2baselink_);
 
     if (pub_scan_base_link_->get_subscription_count() > 0)
     {
