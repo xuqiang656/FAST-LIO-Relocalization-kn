@@ -10,9 +10,6 @@ global_localization_node:
 
     # 地图发布频率，单位:秒
     map_publish_interval: 5.0     
-    # Bag playback helper: stamp map->odom, odom->base_link, /scan_base_link,
-    # and /localization_3d with node time (/clock when use_sim_time=true).
-    stamp_outputs_with_node_time: false
 
     # Downsample and ICP parameters.
     voxelsize_coarse: 0.2   # 初步下采样体素大小

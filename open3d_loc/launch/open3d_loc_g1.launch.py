@@ -5,6 +5,43 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import glob
 import os
+import time
+
+
+LOG_KEEP_DAYS = 7
+LOG_MAX_FILES = 50
+
+
+def clean_open3d_logs(log_dir):
+    if not os.path.isdir(log_dir):
+        return
+
+    now = time.time()
+    keep_seconds = LOG_KEEP_DAYS * 24 * 60 * 60
+    log_files = []
+
+    for name in os.listdir(log_dir):
+        path = os.path.join(log_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        if now - mtime > keep_seconds:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            continue
+        log_files.append((mtime, path))
+
+    log_files.sort(reverse=True)
+    for _, path in log_files[LOG_MAX_FILES:]:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def generate_launch_description():
@@ -15,6 +52,7 @@ def generate_launch_description():
     open3d_loc_dir = source_candidates[0] if source_candidates else open3d_loc_share
     log_dir = os.path.join(open3d_loc_dir, 'log')
     os.makedirs(log_dir, exist_ok=True)
+    clean_open3d_logs(log_dir)
 
     ros_log_dir = SetEnvironmentVariable('ROS_LOG_DIR', log_dir)
 
@@ -24,12 +62,6 @@ def generate_launch_description():
         default_value='false',
         description='Use simulation time'
     )
-    stamp_outputs_with_node_time_arg = DeclareLaunchArgument(
-        'stamp_outputs_with_node_time',
-        default_value='false',
-        description='Stamp localization TF and output topics with node time. Use true for rosbag playback when input header stamps are in a different time domain.'
-    )
-
     # 配置文件路径
     config_file = os.path.join(open3d_loc_share, 'config', 'loc_param_g1.yaml')
 
@@ -43,7 +75,6 @@ def generate_launch_description():
             config_file,
             {
                 'use_sim_time': LaunchConfiguration('use_sim_time'),
-                'stamp_outputs_with_node_time': LaunchConfiguration('stamp_outputs_with_node_time')
             }
         ]
     )
@@ -51,6 +82,5 @@ def generate_launch_description():
     return LaunchDescription([
         ros_log_dir,
         use_sim_time_arg,
-        stamp_outputs_with_node_time_arg,
         global_localization_node,
     ])

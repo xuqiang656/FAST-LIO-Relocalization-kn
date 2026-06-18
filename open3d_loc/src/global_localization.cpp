@@ -76,7 +76,6 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node")
     this->declare_parameter<double>("dis_updatemap", 1);
     this->declare_parameter<double>("map_publish_interval", 2.0);
     this->declare_parameter<std::string>("path_imu_to_base", "");
-    this->declare_parameter<bool>("stamp_outputs_with_node_time", false);
 
     this->get_parameter("pcd_queue_maxsize", queue_maxsize_);
     if (queue_maxsize_ < 1)
@@ -105,7 +104,6 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node")
     this->get_parameter("dis_updatemap", dis_updatemap_);
     std::string path_imu_to_base = "";
     this->get_parameter("path_imu_to_base", path_imu_to_base);
-    this->get_parameter("stamp_outputs_with_node_time", stamp_outputs_with_node_time_);
     double map_publish_interval = 2.0;
     this->get_parameter("map_publish_interval", map_publish_interval);
 
@@ -121,8 +119,6 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node")
                 max_icp_translation_, max_icp_yaw_deg_, max_init_icp_translation_, max_init_icp_yaw_deg_,
                 min_init_fitness_improvement_, min_source_points_, min_target_points_,
                 maxpoints_source_, maxpoints_target_);
-    RCLCPP_INFO(this->get_logger(), "stamp_outputs_with_node_time=%s",
-                stamp_outputs_with_node_time_ ? "true" : "false");
 
     if (initialpose_.size() != 6)
     {
@@ -381,8 +377,7 @@ Eigen::Matrix3d GloabalLocalization::Euler2Matrix3d(const Eigen::Vector3d euler)
 }
 void GloabalLocalization::CallbackImulink2Odom(const nav_msgs::msg::Odometry::SharedPtr imulink2odom)
 {
-    const rclcpp::Time output_stamp =
-        stamp_outputs_with_node_time_ ? this->now() : rclcpp::Time(imulink2odom->header.stamp);
+    const rclcpp::Time output_stamp(imulink2odom->header.stamp);
     {
         std::lock_guard<std::mutex> timestamp_lock(lock_timestamp_);
         timestamp_odom_ = output_stamp;

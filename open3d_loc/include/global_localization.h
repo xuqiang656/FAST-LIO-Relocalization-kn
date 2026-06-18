@@ -156,7 +156,6 @@ private:
     // Eigen::Vector3d cur_loc_;
     /// @brief 更新地图子图的距离,超过则更新地图子图
     double dis_updatemap_;
-    bool stamp_outputs_with_node_time_ = false;
     bool last_open3d_odom_valid_ = false;
     rclcpp::Time last_open3d_odom_stamp_;
     double last_open3d_odom_x_ = 0.0;
